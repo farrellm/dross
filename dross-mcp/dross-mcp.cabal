@@ -1,0 +1,63 @@
+cabal-version:      3.14
+name:               dross-mcp
+version:            0.1.0.0
+synopsis:           MCP server for the Dross note archive
+-- description:
+license:            BSD-3-Clause
+license-file:       LICENSE
+author:             Matthew Farrell
+maintainer:         farrellm@alum.mit.edu
+-- copyright:
+build-type:         Simple
+extra-doc-files:    CHANGELOG.md
+-- extra-source-files:
+
+common warnings
+    ghc-options: -Wall
+
+library
+    import:           warnings
+    hs-source-dirs:   src
+    exposed-modules:
+        Dross.Org.Types
+        Dross.Org.Parser
+        Dross.Mcp.Protocol
+        Dross.Mcp.Server
+        Dross.Tools
+    build-depends:
+        base ^>=4.21.2.0,
+        aeson >=2.1,
+        bytestring,
+        containers,
+        directory,
+        filepath,
+        megaparsec >=9.5,
+        text >=2.0,
+        uuid >=1.3
+    default-language: GHC2024
+    default-extensions:
+        OverloadedStrings
+
+executable dross-mcp
+    import:           warnings
+    main-is:          Main.hs
+    build-depends:
+        base ^>=4.21.2.0,
+        directory,
+        dross-mcp
+    hs-source-dirs:   app
+    default-language: GHC2024
+
+test-suite dross-mcp-test
+    import:           warnings
+    type:             exitcode-stdio-1.0
+    main-is:          Spec.hs
+    hs-source-dirs:   test
+    build-depends:
+        base ^>=4.21.2.0,
+        containers,
+        dross-mcp,
+        text
+    default-language: GHC2024
+    default-extensions:
+        OverloadedStrings
