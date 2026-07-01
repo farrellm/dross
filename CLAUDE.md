@@ -27,7 +27,13 @@ make db-start     # after reboot/db-stop
 make db-migrate   # re-apply db/schema.sql (idempotent; this is the only migration mechanism)
 make db-psql      # inspect the index
 make db-destroy   # drop container + volume (only costs a re-index)
+
+cabal list-bin dross-mcp   # path to the built binary
 ```
+
+Smoke test: pipe newline-delimited JSON-RPC into the binary (`initialize`,
+`tools/list`, `tools/call`), then inspect the index with `make db-psql` or
+`docker exec dross-db psql -U dross -d dross -c ...`.
 
 Host prerequisites: Docker (for the DB) and libpq + pg_config
 (`postgresql-libs` on Arch/Manjaro) to build `postgresql-simple`.
@@ -78,5 +84,12 @@ Postgres (tsvector FTS + pgvector) → MCP tools over stdio.
   other extension goes in a per-file `LANGUAGE` pragma. Keep `-Wall` clean.
 - Where-bound helpers that build aeson `Value`s need explicit type
   signatures, or string literals become ambiguous.
+- postgresql-simple `query_` results usually need a result-type annotation
+  (e.g. `:: IO [(FilePath, Binary ByteString)]`).
+- SHA-256 comes from `cryptohash-sha256` deliberately: crypton >=1.1
+  dropped `memory`'s ByteArrayAccess, so `BA.convert` on digests no longer
+  compiles. Don't "upgrade" back to crypton.
 - Duplicate node IDs across files are resolved with `ON CONFLICT DO
   NOTHING` (first file wins) — deliberate, not an oversight.
+- This machine has no passwordless sudo: for system packages, ask the user
+  to run the install themselves (e.g. `! sudo pacman -S ...`).
