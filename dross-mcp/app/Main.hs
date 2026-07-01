@@ -6,6 +6,7 @@ import System.Environment (getArgs, lookupEnv)
 import System.Exit (die)
 import System.IO (hPutStrLn, stderr)
 
+import Dross.Index (checkSchema, connectDb, refreshIndex)
 import Dross.Mcp.Server (runServer)
 import Dross.Tools (Env (..))
 
@@ -20,5 +21,10 @@ main = do
   dir' <- makeAbsolute dir
   ok <- doesDirectoryExist dir'
   unless ok $ die ("notes directory does not exist: " <> dir')
+  conn <- connectDb
+  hasSchema <- checkSchema conn
+  unless hasSchema $
+    die "database schema missing — run `make db-migrate` (see Makefile)"
+  refreshIndex conn dir'
   hPutStrLn stderr ("dross-mcp serving " <> dir')
-  runServer (Env dir')
+  runServer (Env dir' conn)

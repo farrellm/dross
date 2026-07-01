@@ -8,6 +8,7 @@ import Control.Monad (unless)
 import Data.Aeson
 import Data.Aeson.Types (parseMaybe)
 import Data.ByteString qualified as BS
+import Data.ByteString.Char8 qualified as BS8
 import Data.ByteString.Lazy qualified as BSL
 import Data.Maybe (fromMaybe)
 import Data.Text (Text)
@@ -26,7 +27,7 @@ runServer env = do
     loop = do
       end <- isEOF
       unless end $ do
-        line <- BS.getLine
+        line <- BS8.getLine
         unless (BS.null line) $
           case eitherDecodeStrict line :: Either String Request of
             Left err -> respond (mkError Null parseErrorCode (T.pack err))

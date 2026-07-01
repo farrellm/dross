@@ -1,52 +1,38 @@
--- | Tool definitions and implementations for the MCP server.
---
--- MVP versions: notes are re-read from disk on every call and 'search' is a
--- naive in-memory substring scan. The Postgres index (db/schema.sql)
--- replaces this once wired up.
+-- | Tool definitions and implementations for the MCP server, backed by the
+-- Postgres index. Every call starts with an incremental 'refreshIndex' so
+-- edits made in Emacs since the last call are visible without inotify.
 module Dross.Tools
   ( Env (..)
   , toolDefs
   , callTool
   ) where
 
-import Control.Monad (forM)
 import Data.Aeson
 import Data.Aeson.Types (Parser, parseEither)
 import Data.Bifunctor (first)
 import Data.ByteString qualified as BS
 import Data.Char (isAlphaNum)
-import Data.Map.Strict qualified as Map
-import Data.Maybe (fromMaybe)
 import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Text.Encoding qualified as TE
 import Data.UUID qualified as UUID
 import Data.UUID.V4 qualified as V4
-import System.Directory
-import System.FilePath
+import Database.PostgreSQL.Simple (Connection)
+import System.Directory (doesFileExist)
+import System.FilePath ((<.>), (</>))
 
-import Dross.Org.Parser
-import Dross.Org.Types
+import Dross.Index
 
-newtype Env = Env
+data Env = Env
   { envNotesDir :: FilePath
-  }
-
--- | An addressable note: the file-level node or any headline carrying an
--- @:ID:@ property, following org-node semantics.
-data Node = Node
-  { nodeId :: Text
-  , nodeTitle :: Text
-  , nodeFile :: FilePath
-  , nodeTags :: [Text]
-  , nodeText :: Text
+  , envDb :: Connection
   }
 
 toolDefs :: [Value]
 toolDefs =
   [ tool
       "search"
-      "Search notes by substring match on titles and bodies. Returns matching note IDs, titles, and files."
+      "Full-text search over notes (Postgres websearch syntax, e.g. quoted phrases). Returns matching note IDs, titles, and files."
       ( object
           [ "type" .= t "object"
           , "properties"
@@ -54,7 +40,7 @@ toolDefs =
                 [ "query"
                     .= object
                       [ "type" .= t "string"
-                      , "description" .= t "Text to search for (case-insensitive)"
+                      , "description" .= t "Search query (words, quoted phrases)"
                       ]
                 , "limit"
                     .= object
@@ -76,6 +62,22 @@ toolDefs =
                     .= object
                       [ "type" .= t "string"
                       , "description" .= t "The note's org :ID: property"
+                      ]
+                ]
+          , "required" .= [t "id"]
+          ]
+      )
+  , tool
+      "backlinks"
+      "List notes that link to the given note ID."
+      ( object
+          [ "type" .= t "object"
+          , "properties"
+              .= object
+                [ "id"
+                    .= object
+                      [ "type" .= t "string"
+                      , "description" .= t "The target note's org :ID: property"
                       ]
                 ]
           , "required" .= [t "id"]
@@ -115,108 +117,52 @@ toolDefs =
       object ["name" .= name, "description" .= desc, "inputSchema" .= schema]
 
 callTool :: Env -> Text -> Value -> IO (Either Text Value)
-callTool env "search" args =
-  case parseArgs args (\o -> (,) <$> o .: "query" <*> o .:? "limit" .!= (20 :: Int)) of
-    Left e -> pure (Left e)
-    Right (query, limit) -> do
-      nodes <- loadNodes env
-      let q = T.toLower query
-          matches n =
-            q `T.isInfixOf` T.toLower (nodeTitle n)
-              || q `T.isInfixOf` T.toLower (nodeText n)
-          hits = take limit (filter matches nodes)
-      pure . Right . toJSON $
-        [ object ["id" .= nodeId n, "title" .= nodeTitle n, "file" .= nodeFile n]
-        | n <- hits
-        ]
-callTool env "read-note" args =
-  case parseArgs args (.: "id") of
-    Left e -> pure (Left e)
-    Right nid -> do
-      nodes <- loadNodes env
-      case filter ((== nid) . nodeId) nodes of
-        [] -> pure (Left ("no note with ID " <> nid))
-        (n : _) ->
+callTool env name args = do
+  refreshIndex (envDb env) (envNotesDir env)
+  case name of
+    "search" -> withParsed (\o -> (,) <$> o .: "query" <*> o .:? "limit" .!= (20 :: Int)) $
+      \(q, limit) -> do
+        hits <- searchNodes (envDb env) q limit
+        pure . Right . toJSON $
+          [ object ["id" .= i, "title" .= title, "file" .= file]
+          | (i, title, file) <- hits
+          ]
+    "read-note" -> withParsed (.: "id") $ \nid ->
+      getNode (envDb env) nid >>= \case
+        Nothing -> pure (Left ("no note with ID " <> nid))
+        Just n ->
           pure . Right $
             object
-              [ "id" .= nodeId n
-              , "title" .= nodeTitle n
-              , "file" .= nodeFile n
-              , "tags" .= nodeTags n
-              , "content" .= nodeText n
+              [ "id" .= nrId n
+              , "title" .= nrTitle n
+              , "file" .= nrFile n
+              , "tags" .= nrTags n
+              , "todo" .= nrTodo n
+              , "content" .= nrBody n
               ]
-callTool env "create-note" args =
-  case parseArgs args parseCreate of
-    Left e -> pure (Left e)
-    Right (title, content, tags) -> do
+    "backlinks" -> withParsed (.: "id") $ \nid -> do
+      rows <- backlinks (envDb env) nid
+      pure . Right . toJSON $
+        [ object ["id" .= i, "title" .= title, "file" .= file, "description" .= descr]
+        | (i, title, file, descr) <- rows
+        ]
+    "create-note" -> withParsed parseCreate $ \(title, content, tags) -> do
       nid <- UUID.toText <$> V4.nextRandom
       path <- freshPath (envNotesDir env) (slugify title) nid
       BS.writeFile path (TE.encodeUtf8 (renderNote nid title tags content))
+      refreshIndex (envDb env) (envNotesDir env)
       pure . Right $ object ["id" .= nid, "file" .= path]
+    _ -> pure (Left ("unknown tool: " <> name))
   where
+    withParsed :: (Object -> Parser a) -> (a -> IO (Either Text Value)) -> IO (Either Text Value)
+    withParsed p k =
+      either (pure . Left) k $
+        first T.pack (parseEither (withObject "arguments" p) args)
     parseCreate o =
       (,,)
         <$> o .: "title"
         <*> o .:? "content" .!= ""
         <*> o .:? "tags" .!= []
-callTool _ name _ = pure (Left ("unknown tool: " <> name))
-
-parseArgs :: Value -> (Object -> Parser a) -> Either Text a
-parseArgs v p = first T.pack (parseEither (withObject "arguments" p) v)
-
-loadNodes :: Env -> IO [Node]
-loadNodes env = do
-  files <- listOrgFiles (envNotesDir env)
-  fmap concat . forM files $ \f -> do
-    txt <- TE.decodeUtf8Lenient <$> BS.readFile f
-    case parseDocument f txt of
-      Left _ -> pure [] -- unparsable file; skip rather than fail the tool call
-      Right doc -> pure (collectNodes f doc)
-
-listOrgFiles :: FilePath -> IO [FilePath]
-listOrgFiles dir = do
-  entries <- listDirectory dir
-  fmap concat . forM entries $ \e -> do
-    let p = dir </> e
-    isDir <- doesDirectoryExist p
-    if isDir
-      then
-        if e `elem` [".git", ".attach", "data"]
-          then pure []
-          else listOrgFiles p
-      else pure [p | takeExtension p == ".org"]
-
-collectNodes :: FilePath -> Document -> [Node]
-collectNodes path doc = fileNode <> concatMap fromHeadline (docHeadlines doc)
-  where
-    fileNode = case documentId doc of
-      Nothing -> []
-      Just nid ->
-        [ Node
-            { nodeId = nid
-            , nodeTitle =
-                fromMaybe (T.pack (takeBaseName path)) (documentTitle doc)
-            , nodeFile = path
-            , nodeTags = docFiletags doc
-            , nodeText =
-                T.intercalate "\n" $
-                  docPreamble doc : map titledSubtree (docHeadlines doc)
-            }
-        ]
-    titledSubtree hl = T.intercalate "\n" [hlTitle hl, subtreeText hl]
-    fromHeadline hl =
-      let self = case Map.lookup "ID" (hlProperties hl) of
-            Nothing -> []
-            Just nid ->
-              [ Node
-                  { nodeId = nid
-                  , nodeTitle = hlTitle hl
-                  , nodeFile = path
-                  , nodeTags = hlTags hl <> docFiletags doc
-                  , nodeText = subtreeText hl
-                  }
-              ]
-       in self <> concatMap fromHeadline (hlChildren hl)
 
 slugify :: Text -> Text
 slugify title =

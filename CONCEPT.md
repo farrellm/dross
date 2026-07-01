@@ -161,7 +161,8 @@ Roughly ordered by value:
 - **Single user.** No auth model beyond a Telegram chat-ID allowlist and a
   local-only MCP server; no per-user namespacing anywhere.
 - Index database: **PostgreSQL** — `tsvector` for full-text, **pgvector**
-  for embeddings; a rebuildable cache, never the source of truth.
+  for embeddings; a rebuildable cache, never the source of truth. Runs in
+  **Docker** (`pgvector/pgvector` image), managed via `dross-mcp/Makefile`.
 - Embeddings: **Voyage AI** (`voyage-3.5`) for vectors, searched via
   pgvector cosine distance (see Embeddings).
 - Proposal staging: **git branch per proposal** (`proposal/<id>`). Approve =
