@@ -28,6 +28,7 @@ import Database.PostgreSQL.Simple (Connection)
 import System.Directory (copyFile, createDirectoryIfMissing, doesFileExist, renameFile)
 import System.FilePath (takeFileName, (<.>), (</>))
 
+import Dross.Embed (EmbedConfig (..), InputType (..), embedTexts)
 import Dross.Index
 import Dross.Org.Edit
 import Dross.Org.Parser (parseDocument)
@@ -36,6 +37,9 @@ import Dross.Org.Types (documentNodeIds)
 data Env = Env
   { envNotesDir :: FilePath
   , envDb :: Connection
+  , envEmbed :: Maybe EmbedConfig
+    -- ^ Nothing when VOYAGE_API_KEY is unset; semantic-search is disabled
+    -- but everything else works (local-first).
   }
 
 toolDefs :: [Value]
@@ -56,6 +60,27 @@ toolDefs =
                     .= object
                       [ "type" .= t "integer"
                       , "description" .= t "Maximum number of results (default 20)"
+                      ]
+                ]
+          , "required" .= [t "query"]
+          ]
+      )
+  , tool
+      "semantic-search"
+      "Embedding-similarity search over notes (Voyage + pgvector). Returns matching note IDs, titles, files, and a 0-1 similarity score. Requires VOYAGE_API_KEY."
+      ( object
+          [ "type" .= t "object"
+          , "properties"
+              .= object
+                [ "query"
+                    .= object
+                      [ "type" .= t "string"
+                      , "description" .= t "Natural-language query to embed and match against note content"
+                      ]
+                , "limit"
+                    .= object
+                      [ "type" .= t "integer"
+                      , "description" .= t "Maximum number of results (default 10)"
                       ]
                 ]
           , "required" .= [t "query"]
@@ -300,6 +325,24 @@ callTool env name args = do
           [ object ["id" .= i, "title" .= title, "file" .= file]
           | (i, title, file) <- hits
           ]
+    "semantic-search" -> withParsed (\o -> (,) <$> o .: "query" <*> o .:? "limit" .!= (10 :: Int)) $
+      \(q, limit) -> case envEmbed env of
+        Nothing ->
+          pure (Left "semantic-search is disabled: set VOYAGE_API_KEY and restart the server")
+        Just cfg -> do
+          -- Catch up on anything not yet embedded (content-hash keyed, so
+          -- unchanged notes cost nothing); a failure here is logged and
+          -- search runs over the embeddings that exist.
+          embedPending (envDb env) (embedModel cfg) (embedTexts cfg Document)
+          embedTexts cfg Query [q] >>= \case
+            Left err -> pure (Left ("could not embed query: " <> err))
+            Right [vec] -> do
+              hits <- semanticSearch (envDb env) (embedModel cfg) vec limit
+              pure . Right . toJSON $
+                [ object ["id" .= i, "title" .= title, "file" .= file, "score" .= score]
+                | (i, title, file, score) <- hits
+                ]
+            Right _ -> pure (Left "embedding API returned an unexpected number of vectors")
     "read-note" -> withParsed (.: "id") $ \nid ->
       getNode (envDb env) nid >>= \case
         Nothing -> pure (Left ("no note with ID " <> nid))

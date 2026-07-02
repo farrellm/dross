@@ -15,10 +15,19 @@ Working:
   without inotify. The database is a rebuildable cache — org files are the
   source of truth.
 - **Tools**: `search` (Postgres FTS + title substring fallback),
-  `read-note`, `backlinks`, `create-note`.
+  `semantic-search` (Voyage embeddings + pgvector cosine distance),
+  `read-note`, `backlinks`, `forward-links`, `neighborhood`, `create-note`,
+  `update-note`, `append-note`, `capture`, `archive-document`. Mutations
+  follow the check-then-refuse write policy (hash from `read-note`).
+- **Embeddings** (`Dross.Chunk` + `Dross.Embed`): notes are chunked at
+  headline level during indexing; vectors are fetched from Voyage
+  (`voyage-3.5`) lazily inside `semantic-search`, keyed by chunk content
+  hash so unchanged notes are never re-embedded. Requires `VOYAGE_API_KEY`
+  (unset = semantic-search disabled, everything else works);
+  `DROSS_EMBED_MODEL` overrides the model.
 
-Not yet wired: Voyage embeddings, `semantic-search`, git auto-commit,
-the check-then-refuse write policy for note edits.
+Not yet wired: extracted-text embedding for archived documents,
+git auto-commit.
 
 ## Database (Docker)
 
@@ -51,9 +60,15 @@ DROSS_NOTES_DIR=~/notes cabal run dross-mcp
 # or: cabal run dross-mcp -- ~/notes
 ```
 
+Set `VOYAGE_API_KEY` in the server's environment to enable
+`semantic-search` (`DROSS_EMBED_MODEL` overrides `voyage-3.5`,
+`DROSS_EMBED_URL` points at a different provider or a test mock);
+without the key the server runs with that one tool disabled. Nothing loads
+`.env` — export the variable or put it in the MCP client's server config.
+
 Register with Claude Code (using the built binary so startup is instant):
 
 ```sh
 cabal install --installdir=bin --overwrite-policy=always
-claude mcp add dross -- $(pwd)/bin/dross-mcp ~/notes
+claude mcp add dross --env VOYAGE_API_KEY=... -- $(pwd)/bin/dross-mcp ~/notes
 ```

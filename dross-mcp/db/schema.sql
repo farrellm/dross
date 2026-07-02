@@ -52,12 +52,28 @@ CREATE TABLE IF NOT EXISTS chunks (
     content_sha256 bytea NOT NULL,
     UNIQUE (node_id, seq)
 );
+CREATE INDEX IF NOT EXISTS chunks_sha_idx ON chunks (content_sha256);
 
+-- Embeddings are keyed by chunk content hash + model, NOT chunk id, so they
+-- survive re-indexing (indexFile deletes and re-inserts nodes and chunks).
+-- Orphans left by edits are harmless at personal scale; prune manually with
+--   DELETE FROM embeddings e WHERE NOT EXISTS
+--     (SELECT 1 FROM chunks c WHERE c.content_sha256 = e.content_sha256);
 -- voyage-3.5 default output dimension is 1024.
+DO $$
+BEGIN
+    IF EXISTS (SELECT 1 FROM information_schema.columns
+               WHERE table_schema = 'public' AND table_name = 'embeddings'
+                 AND column_name = 'chunk_id') THEN
+        DROP TABLE embeddings;
+    END IF;
+END $$;
+
 CREATE TABLE IF NOT EXISTS embeddings (
-    chunk_id  bigint PRIMARY KEY REFERENCES chunks (id) ON DELETE CASCADE,
-    model     text NOT NULL,
-    embedding vector(1024) NOT NULL
+    content_sha256 bytea NOT NULL,
+    model          text  NOT NULL,
+    embedding      vector(1024) NOT NULL,
+    PRIMARY KEY (content_sha256, model)
 );
 
 -- pgvector's exact scan is fine at personal scale. If it ever isn't:

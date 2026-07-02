@@ -74,8 +74,9 @@ Postgres (tsvector FTS + pgvector) → MCP tools over stdio.
   to stderr (printing to stdout corrupts the MCP stream). Notifications
   (requests without `id`) must never be answered.
 - `src/Dross/Tools.hs` — tool schemas + implementations (`search`,
-  `read-note`, `backlinks`, `forward-links`, `neighborhood`, `create-note`,
-  `update-note`, `append-note`, `capture`, `archive-document`).
+  `semantic-search`, `read-note`, `backlinks`, `forward-links`,
+  `neighborhood`, `create-note`, `update-note`, `append-note`, `capture`,
+  `archive-document`).
   Tool results are JSON encoded into a single MCP text content block; tool
   failures return `isError: true` rather than JSON-RPC errors. Mutations
   follow the decided write policy: atomic temp-file+rename writes and hash
@@ -85,9 +86,19 @@ Postgres (tsvector FTS + pgvector) → MCP tools over stdio.
   also refuses edits that would drop node IDs still present in the file.
   The raw-text surgery is pure (`src/Dross/Org/Edit.hs`) and covered by
   the test suite.
+- `src/Dross/Chunk.hs`, `Dross/Embed.hs` — the embedding pipeline.
+  `indexFile` writes headline-level chunks (pure packing in `Chunk`, tested);
+  `Embed` is the Voyage HTTP client (`VOYAGE_API_KEY`; `DROSS_EMBED_MODEL`
+  overrides `voyage-3.5`, `DROSS_EMBED_URL` the endpoint — useful for a
+  local mock when smoke-testing). Vectors are fetched lazily inside
+  `semantic-search` only (`embedPending`) — no other tool touches the
+  network, and a missing key just disables that one tool. Embeddings are
+  keyed by `(content_sha256, model)`, not chunk id, so they survive
+  re-indexing; only changed content is re-embedded.
 - `db/schema.sql` — canonical schema, applied via `make db-migrate`; every
   statement must stay idempotent (`IF NOT EXISTS` / `ON CONFLICT`). The
-  `embeddings` table is `vector(1024)` for voyage-3.5.
+  `embeddings` table is `vector(1024)` for voyage-3.5, keyed by content
+  hash + model.
 
 ## Conventions
 

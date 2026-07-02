@@ -165,6 +165,19 @@ Roughly ordered by value:
   **Docker** (`pgvector/pgvector` image), managed via `dross-mcp/Makefile`.
 - Embeddings: **Voyage AI** (`voyage-3.5`) for vectors, searched via
   pgvector cosine distance (see Embeddings).
+- Embedding storage: keyed by **`(content_sha256, model)`**, not chunk id —
+  re-indexing a file deletes and re-inserts its nodes and chunks, and
+  hash-keyed embeddings survive that, so only genuinely new content hits
+  the API. Orphaned vectors from edited-away content are tolerated
+  (harmless at personal scale; prunable with one SQL statement).
+- Embedding runs **only inside `semantic-search`** (catch-up before the
+  query): every other tool — including capture — never touches the
+  network, and a Voyage outage degrades search to existing embeddings
+  instead of slowing anything else down. Configured via `VOYAGE_API_KEY`
+  (unset = semantic-search disabled, everything else unaffected) and
+  optional `DROSS_EMBED_MODEL`.
+- Embedding scope, phase one: **org notes only** — archived-document
+  extracted text still needs its own ingestion path (see Document archive).
 - Proposal staging: **git branch per proposal** (`proposal/<id>`). Approve =
   merge to main (fast-forward when possible); reject = delete branch. Diffs,
   conflict detection, and audit come free from git; the Telegram approval

@@ -22,6 +22,8 @@ library
         Dross.Org.Types
         Dross.Org.Parser
         Dross.Org.Edit
+        Dross.Chunk
+        Dross.Embed
         Dross.Index
         Dross.Mcp.Protocol
         Dross.Mcp.Server
@@ -34,6 +36,9 @@ library
         cryptohash-sha256,
         directory,
         filepath,
+        http-client >=0.7,
+        http-client-tls >=0.3,
+        http-types,
         megaparsec >=9.5,
         postgresql-simple >=0.7,
         text >=2.0,
@@ -49,7 +54,8 @@ executable dross-mcp
     build-depends:
         base ^>=4.21.2.0,
         directory,
-        dross-mcp
+        dross-mcp,
+        text
     hs-source-dirs:   app
     default-language: GHC2024
 

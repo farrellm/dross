@@ -6,6 +6,9 @@ import System.Environment (getArgs, lookupEnv)
 import System.Exit (die)
 import System.IO (hPutStrLn, stderr)
 
+import Data.Text qualified as T
+
+import Dross.Embed (EmbedConfig (..), newEmbedConfig)
 import Dross.Index (checkSchema, connectDb, refreshIndex)
 import Dross.Mcp.Server (runServer)
 import Dross.Tools (Env (..))
@@ -26,5 +29,16 @@ main = do
   unless hasSchema $
     die "database schema missing — run `make db-migrate` (see Makefile)"
   refreshIndex conn dir'
+  apiKey <- lookupEnv "VOYAGE_API_KEY"
+  modelOverride <- lookupEnv "DROSS_EMBED_MODEL"
+  urlOverride <- lookupEnv "DROSS_EMBED_URL"
+  embed <- case apiKey of
+    Nothing -> do
+      hPutStrLn stderr "dross-mcp: VOYAGE_API_KEY unset — semantic-search disabled"
+      pure Nothing
+    Just key -> do
+      cfg <- newEmbedConfig (T.pack key) (T.pack <$> modelOverride) urlOverride
+      hPutStrLn stderr ("dross-mcp: embeddings enabled (" <> T.unpack (embedModel cfg) <> ")")
+      pure (Just cfg)
   hPutStrLn stderr ("dross-mcp serving " <> dir')
-  runServer (Env dir' conn)
+  runServer (Env dir' conn embed)

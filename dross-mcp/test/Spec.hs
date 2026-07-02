@@ -10,6 +10,8 @@ import Data.Text (Text)
 import Data.Text qualified as T
 import System.Exit
 
+import Dross.Chunk (chunkNode)
+import Dross.Embed (renderVector)
 import Dross.Org.Edit
 import Dross.Org.Parser
 import Dross.Org.Types
@@ -195,6 +197,36 @@ main = do
       check "lit source" (Just "https://x.test") (Map.lookup "SOURCE" (docProperties litDoc))
       check "lit filetags" ["literature", "ATTACH"] (docFiletags litDoc)
       check "lit title" (Just "A Paper") (documentTitle litDoc)
+
+  -- Chunking: typical notes are one title-prefixed chunk; long ones split
+  -- at segment (headline) boundaries, then blank lines, then hard splits.
+  check
+    "chunk small note"
+    ["Title\n\nIntro.\nHeadline\nBody."]
+    (chunkNode 8000 "Title" ["Intro.", "Headline\nBody."])
+  check
+    "chunk empty body is just the title"
+    ["Title"]
+    (chunkNode 8000 "Title" ["", "  \n  "])
+  check
+    "chunk packs segments up to the budget"
+    ["T\n\naaaa\nbbbb", "T\n\ncccc"]
+    (chunkNode 9 "T" ["aaaa", "bbbb", "cccc"])
+  check
+    "chunk splits oversized segment at blank lines"
+    ["T\n\naaaa", "T\n\nbbbb"]
+    (chunkNode 5 "T" ["aaaa\n\nbbbb"])
+  check
+    "chunk hard-splits a single long paragraph"
+    ["T\n\naaaa", "T\n\naa"]
+    (chunkNode 4 "T" ["aaaaaa"])
+
+  -- pgvector literal (pins show's float rendering).
+  check
+    "renderVector"
+    "[0.5,-2.0,1.0e-2]"
+    (renderVector [0.5, -2, 1.0e-2])
+  check "renderVector empty" "[]" (renderVector [])
 
   n <- readIORef failures
   if n == 0

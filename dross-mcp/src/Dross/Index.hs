@@ -15,6 +15,8 @@ module Dross.Index
   , backlinks
   , forwardLinks
   , neighborhood
+  , embedPending
+  , semanticSearch
   , NodeRow (..)
   ) where
 
@@ -39,6 +41,8 @@ import System.Environment (lookupEnv)
 import System.FilePath (takeBaseName, takeExtension, (</>))
 import System.IO (hPutStrLn, stderr)
 
+import Dross.Chunk (chunkNode, defaultChunkChars)
+import Dross.Embed (renderVector)
 import Dross.Org.Parser
 import Dross.Org.Types
 
@@ -93,11 +97,13 @@ indexFile conn path bytes h mtime = withTransaction conn $ do
       -- contributes no nodes until it parses again.
       hPutStrLn stderr ("dross-mcp: parse failed for " <> path <> ":\n" <> err)
     Right doc -> do
-      _ <-
-        executeMany
+      let nodes = collectNodes path doc
+      inserted <-
+        returning
           conn
           "INSERT INTO nodes (id, file, level, title, tags, todo, body) \
-          \VALUES (?, ?, ?, ?, ?, ?, ?) ON CONFLICT (id) DO NOTHING"
+          \VALUES (?, ?, ?, ?, ?, ?, ?) ON CONFLICT (id) DO NOTHING \
+          \RETURNING id"
           [ ( nodeId n
             , path
             , nodeLevel n
@@ -106,7 +112,23 @@ indexFile conn path bytes h mtime = withTransaction conn $ do
             , nodeTodo n
             , nodeText n
             )
-          | n <- collectNodes path doc
+          | n <- nodes
+          ] ::
+          IO [Only Text]
+      -- Chunks only for the node IDs this file won (duplicate IDs go to
+      -- the first file; its chunks must not be touched). Old chunks are
+      -- already gone via the nodes delete cascade.
+      let won = Set.fromList [i | Only i <- inserted]
+      _ <-
+        executeMany
+          conn
+          "INSERT INTO chunks (node_id, seq, content, content_sha256) \
+          \VALUES (?, ?, ?, ?)"
+          [ (nodeId n, seq_, c, Binary (SHA256.hash (TE.encodeUtf8 c)))
+          | n <- nodes
+          , nodeId n `Set.member` won
+          , (seq_, c) <-
+              zip [0 :: Int ..] (chunkNode defaultChunkChars (nodeTitle n) (nodeSegments n))
           ]
       _ <-
         executeMany
@@ -212,6 +234,67 @@ forwardLinks conn nid =
     \WHERE l.src = ? ORDER BY n.title"
     (Only nid)
 
+-- Embeddings -----------------------------------------------------------------
+
+-- | Chunk contents not yet embedded under the given model, deduplicated by
+-- content hash (embeddings are keyed by hash + model, so identical content
+-- embeds once).
+pendingChunks :: Connection -> Text -> IO [(Binary ByteString, Text)]
+pendingChunks conn model =
+  query
+    conn
+    "SELECT DISTINCT ON (c.content_sha256) c.content_sha256, c.content \
+    \FROM chunks c \
+    \LEFT JOIN embeddings e \
+    \  ON e.content_sha256 = c.content_sha256 AND e.model = ? \
+    \WHERE e.content_sha256 IS NULL \
+    \ORDER BY c.content_sha256"
+    (Only model)
+
+insertEmbeddings :: Connection -> Text -> [(Binary ByteString, [Float])] -> IO ()
+insertEmbeddings conn model rows = do
+  -- Plain ?s only: executeMany's multi-row template parser rejects casts
+  -- like ?::vector. The rendered literal coerces to the vector column.
+  _ <-
+    executeMany
+      conn
+      "INSERT INTO embeddings (content_sha256, model, embedding) \
+      \VALUES (?, ?, ?) ON CONFLICT DO NOTHING"
+      [(sha, model, renderVector v) | (sha, v) <- rows]
+  pure ()
+
+-- | Embed any chunks still missing vectors for the model. Zero pending —
+-- the common case — means zero network. Failures are logged to stderr and
+-- retried on the next call; search proceeds over whatever exists.
+embedPending
+  :: Connection -> Text -> ([Text] -> IO (Either Text [[Float]])) -> IO ()
+embedPending conn model embed = do
+  pending <- pendingChunks conn model
+  unless (null pending) $
+    embed (map snd pending) >>= \case
+      Left err ->
+        hPutStrLn stderr ("dross-mcp: embedding failed: " <> T.unpack err)
+      Right vecs ->
+        insertEmbeddings conn model (zip (map fst pending) vecs)
+
+-- | Nodes ranked by cosine similarity of their best chunk to the query
+-- vector (score = 1 - cosine distance, higher is better).
+semanticSearch
+  :: Connection -> Text -> [Float] -> Int -> IO [(Text, Text, FilePath, Double)]
+semanticSearch conn model vec limit =
+  query
+    conn
+    "SELECT n.id, n.title, n.file, \
+    \       1 - min(e.embedding <=> ?::vector) AS score \
+    \FROM embeddings e \
+    \JOIN chunks c ON c.content_sha256 = e.content_sha256 \
+    \JOIN nodes n ON n.id = c.node_id \
+    \WHERE e.model = ? \
+    \GROUP BY n.id, n.title, n.file \
+    \ORDER BY score DESC \
+    \LIMIT ?"
+    (renderVector vec, model, limit)
+
 -- Extraction ----------------------------------------------------------------
 
 -- | An addressable note: the file-level node or any headline carrying an
@@ -222,8 +305,14 @@ data Node = Node
   , nodeLevel :: Int
   , nodeTodo :: Maybe Text
   , nodeTags :: [Text]
-  , nodeText :: Text
+  , nodeSegments :: [Text]
+    -- ^ Headline-level pieces of the body (preamble/own body, then one per
+    -- child subtree) — the chunking boundaries for embedding.
   }
+
+-- | The stored body: segments joined exactly as 'subtreeText' would.
+nodeText :: Node -> Text
+nodeText = T.intercalate "\n" . nodeSegments
 
 collectNodes :: FilePath -> Document -> [Node]
 collectNodes path doc = fileNode <> concatMap fromHeadline (docHeadlines doc)
@@ -238,9 +327,8 @@ collectNodes path doc = fileNode <> concatMap fromHeadline (docHeadlines doc)
             , nodeLevel = 0
             , nodeTodo = Nothing
             , nodeTags = docFiletags doc
-            , nodeText =
-                T.intercalate "\n" $
-                  docPreamble doc : map titledSubtree (docHeadlines doc)
+            , nodeSegments =
+                docPreamble doc : map titledSubtree (docHeadlines doc)
             }
         ]
     titledSubtree hl = T.intercalate "\n" [hlTitle hl, subtreeText hl]
@@ -254,7 +342,8 @@ collectNodes path doc = fileNode <> concatMap fromHeadline (docHeadlines doc)
                   , nodeLevel = hlLevel hl
                   , nodeTodo = hlTodo hl
                   , nodeTags = hlTags hl <> docFiletags doc
-                  , nodeText = subtreeText hl
+                  , nodeSegments =
+                      hlBody hl : map titledSubtree (hlChildren hl)
                   }
               ]
        in self <> concatMap fromHeadline (hlChildren hl)
