@@ -34,6 +34,9 @@ cabal list-bin dross-mcp   # path to the built binary
 Smoke test: pipe newline-delimited JSON-RPC into the binary (`initialize`,
 `tools/list`, `tools/call`), then inspect the index with `make db-psql` or
 `docker exec dross-db psql -U dross -d dross -c ...`.
+No `jq` on this machine — extract fields from responses with `python3 -c`.
+Smoke-testing against a scratch notes dir repoints the shared index to it;
+that's safe (rebuildable cache) — the next run against real notes re-indexes.
 
 Host prerequisites: Docker (for the DB) and libpq + pg_config
 (`postgresql-libs` on Arch/Manjaro) to build `postgresql-simple`.
@@ -98,5 +101,7 @@ Postgres (tsvector FTS + pgvector) → MCP tools over stdio.
   compiles. Don't "upgrade" back to crypton.
 - Duplicate node IDs across files are resolved with `ON CONFLICT DO
   NOTHING` (first file wins) — deliberate, not an oversight.
+- New mutating tools go through `mutateNote` in `Tools.hs` (hash
+  check-then-refuse, atomic write, re-index) — don't write files directly.
 - This machine has no passwordless sudo: for system packages, ask the user
   to run the install themselves (e.g. `! sudo pacman -S ...`).
