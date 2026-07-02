@@ -1,3 +1,5 @@
+{-# LANGUAGE MultilineStrings #-}
+
 module Main (main) where
 
 import Control.Monad (unless)
@@ -92,15 +94,16 @@ main = do
 
   -- A #+begin_src line is not a keyword and must stay in the body.
   let srcSample =
-        T.unlines
-          [ ":PROPERTIES:"
-          , ":ID: src-note"
-          , ":END:"
-          , "#+title: Src"
-          , "#+begin_src haskell"
-          , "main = pure ()"
-          , "#+end_src"
-          ]
+        """
+        :PROPERTIES:
+        :ID: src-note
+        :END:
+        #+title: Src
+        #+begin_src haskell
+        main = pure ()
+        #+end_src
+
+        """
   check
     "splitMetadata stops at begin_src"
     ([":PROPERTIES:", ":ID: src-note", ":END:", "#+title: Src"], Just "#+begin_src haskell")
@@ -111,16 +114,16 @@ main = do
       updated = renderFile sampleMeta "New body text."
   check
     "renderFile"
-    ( T.unlines
-        [ ":PROPERTIES:"
-        , ":ID: file-id-123"
-        , ":END:"
-        , "#+title: Sample Note"
-        , "#+filetags: :dross:test:"
-        , ""
-        , "New body text."
-        ]
-    )
+    """
+    :PROPERTIES:
+    :ID: file-id-123
+    :END:
+    #+title: Sample Note
+    #+filetags: :dross:test:
+
+    New body text.
+
+    """
     updated
   check
     "renderFile reparses with same id"
@@ -200,24 +203,25 @@ main = do
 
 sample :: Text
 sample =
-  T.unlines
-    [ ":PROPERTIES:"
-    , ":ID: file-id-123"
-    , ":END:"
-    , "#+title: Sample Note"
-    , "#+filetags: :dross:test:"
-    , ""
-    , "Intro paragraph linking to [[id:other-note][another note]]."
-    , ""
-    , "* TODO First headline :alpha:beta:"
-    , ":PROPERTIES:"
-    , ":ID: hl-id-456"
-    , ":END:"
-    , "Body of first headline."
-    , ""
-    , "** Child headline"
-    , "Nested body with [[https://example.com][a web link]] and [[id:third]]."
-    , ""
-    , "* Second :gamma:"
-    , "No drawer here."
-    ]
+  """
+  :PROPERTIES:
+  :ID: file-id-123
+  :END:
+  #+title: Sample Note
+  #+filetags: :dross:test:
+
+  Intro paragraph linking to [[id:other-note][another note]].
+
+  * TODO First headline :alpha:beta:
+  :PROPERTIES:
+  :ID: hl-id-456
+  :END:
+  Body of first headline.
+
+  ** Child headline
+  Nested body with [[https://example.com][a web link]] and [[id:third]].
+
+  * Second :gamma:
+  No drawer here.
+
+  """
