@@ -9,6 +9,7 @@ module Dross.Org.Types
   , LinkTarget (..)
   , documentId
   , documentTitle
+  , documentNodeIds
   , allHeadlines
   , subtreeText
   ) where
@@ -60,6 +61,13 @@ documentId = Map.lookup "ID" . docProperties
 
 documentTitle :: Document -> Maybe Text
 documentTitle = Map.lookup "title" . docKeywords
+
+-- | Every node ID in the document: the file-level ID (if any) followed by
+-- headline IDs in document order.
+documentNodeIds :: Document -> [Text]
+documentNodeIds doc =
+  maybe [] pure (documentId doc)
+    <> [i | hl <- allHeadlines doc, Just i <- [Map.lookup "ID" (hlProperties hl)]]
 
 allHeadlines :: Document -> [Headline]
 allHeadlines = concatMap flatten . docHeadlines

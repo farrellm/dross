@@ -122,6 +122,8 @@ data NodeRow = NodeRow
   { nrId :: Text
   , nrTitle :: Text
   , nrFile :: FilePath
+  , nrLevel :: Int
+    -- ^ 0 for the file-level node, headline level otherwise.
   , nrTags :: [Text]
   , nrTodo :: Maybe Text
   , nrBody :: Text
@@ -145,12 +147,12 @@ getNode conn nid = do
   rows <-
     query
       conn
-      "SELECT id, title, file, tags, todo, body FROM nodes WHERE id = ?"
+      "SELECT id, title, file, level, tags, todo, body FROM nodes WHERE id = ?"
       (Only nid)
   pure $ case rows of
     [] -> Nothing
-    ((i, title, file, PGArray tags, todo, body) : _) ->
-      Just (NodeRow i title file tags todo body)
+    ((i, title, file, level, PGArray tags, todo, body) : _) ->
+      Just (NodeRow i title file level tags todo body)
 
 -- | Notes whose bodies link to the given ID.
 backlinks :: Connection -> Text -> IO [(Text, Text, FilePath, Maybe Text)]

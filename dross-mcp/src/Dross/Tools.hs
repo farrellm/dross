@@ -7,21 +7,27 @@ module Dross.Tools
   , callTool
   ) where
 
+import Crypto.Hash.SHA256 qualified as SHA256
 import Data.Aeson
 import Data.Aeson.Types (Parser, parseEither)
 import Data.Bifunctor (first)
+import Data.Bits (shiftR, (.&.))
+import Data.ByteString (ByteString)
 import Data.ByteString qualified as BS
-import Data.Char (isAlphaNum)
+import Data.Char (intToDigit, isAlphaNum)
 import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Text.Encoding qualified as TE
 import Data.UUID qualified as UUID
 import Data.UUID.V4 qualified as V4
 import Database.PostgreSQL.Simple (Connection)
-import System.Directory (doesFileExist)
+import System.Directory (doesFileExist, renameFile)
 import System.FilePath ((<.>), (</>))
 
 import Dross.Index
+import Dross.Org.Edit
+import Dross.Org.Parser (parseDocument)
+import Dross.Org.Types (documentNodeIds)
 
 data Env = Env
   { envNotesDir :: FilePath
@@ -53,7 +59,7 @@ toolDefs =
       )
   , tool
       "read-note"
-      "Read a note by its org ID. Returns title, tags, file path, and content."
+      "Read a note by its org ID. Returns title, tags, file path, content, and the file's content hash (pass it to update-note / append-note)."
       ( object
           [ "type" .= t "object"
           , "properties"
@@ -85,7 +91,7 @@ toolDefs =
       )
   , tool
       "create-note"
-      "Create a new note file with a generated org ID. Returns the new note's ID and file path."
+      "Create a new note file with a generated org ID. Returns the new note's ID, file path, and content hash (usable with update-note / append-note)."
       ( object
           [ "type" .= t "object"
           , "properties"
@@ -106,6 +112,58 @@ toolDefs =
                       ]
                 ]
           , "required" .= [t "title"]
+          ]
+      )
+  , tool
+      "update-note"
+      "Replace a note's body, keeping its ID and metadata (property drawer and #+keyword lines). Only file-level notes. Refuses if the file changed since it was read: pass the hash from read-note, and on a conflict re-read and retry."
+      ( object
+          [ "type" .= t "object"
+          , "properties"
+              .= object
+                [ "id"
+                    .= object
+                      [ "type" .= t "string"
+                      , "description" .= t "The note's org :ID: property"
+                      ]
+                , "content"
+                    .= object
+                      [ "type" .= t "string"
+                      , "description" .= t "New body (raw org text); replaces everything below the file's metadata block"
+                      ]
+                , "hash"
+                    .= object
+                      [ "type" .= t "string"
+                      , "description" .= t "File content hash from read-note"
+                      ]
+                ]
+          , "required" .= [t "id", t "content", t "hash"]
+          ]
+      )
+  , tool
+      "append-note"
+      "Append text to the end of a note's file, separated by a blank line. Only file-level notes. Refuses if the file changed since it was read: pass the hash from read-note, and on a conflict re-read and retry."
+      ( object
+          [ "type" .= t "object"
+          , "properties"
+              .= object
+                [ "id"
+                    .= object
+                      [ "type" .= t "string"
+                      , "description" .= t "The note's org :ID: property"
+                      ]
+                , "content"
+                    .= object
+                      [ "type" .= t "string"
+                      , "description" .= t "Text to append (raw org)"
+                      ]
+                , "hash"
+                    .= object
+                      [ "type" .= t "string"
+                      , "description" .= t "File content hash from read-note"
+                      ]
+                ]
+          , "required" .= [t "id", t "content", t "hash"]
           ]
       )
   ]
@@ -130,7 +188,8 @@ callTool env name args = do
     "read-note" -> withParsed (.: "id") $ \nid ->
       getNode (envDb env) nid >>= \case
         Nothing -> pure (Left ("no note with ID " <> nid))
-        Just n ->
+        Just n -> do
+          bytes <- BS.readFile (nrFile n)
           pure . Right $
             object
               [ "id" .= nrId n
@@ -139,6 +198,7 @@ callTool env name args = do
               , "tags" .= nrTags n
               , "todo" .= nrTodo n
               , "content" .= nrBody n
+              , "hash" .= sha256Hex bytes
               ]
     "backlinks" -> withParsed (.: "id") $ \nid -> do
       rows <- backlinks (envDb env) nid
@@ -149,9 +209,32 @@ callTool env name args = do
     "create-note" -> withParsed parseCreate $ \(title, content, tags) -> do
       nid <- UUID.toText <$> V4.nextRandom
       path <- freshPath (envNotesDir env) (slugify title) nid
-      BS.writeFile path (TE.encodeUtf8 (renderNote nid title tags content))
+      let bytes = TE.encodeUtf8 (renderNote nid title tags content)
+      atomicWrite path bytes
       refreshIndex (envDb env) (envNotesDir env)
-      pure . Right $ object ["id" .= nid, "file" .= path]
+      pure . Right $ object ["id" .= nid, "file" .= path, "hash" .= sha256Hex bytes]
+    "update-note" -> withParsed parseEdit $ \(nid, content, expected) ->
+      mutateNote env nid expected $ \path old ->
+        let new = replaceBody old content
+         in case parseDocument path new of
+              Left err ->
+                Left ("rejected: the updated file would not parse:\n" <> T.pack err)
+              Right newDoc ->
+                let oldIds = either (const []) documentNodeIds (parseDocument path old)
+                    lost = filter (`notElem` documentNodeIds newDoc) oldIds
+                 in if null lost
+                      then Right new
+                      else
+                        Left
+                          ( "rejected: the update would delete note IDs still in the file: "
+                              <> T.intercalate ", " lost
+                              <> ". Keep their headlines (with :PROPERTIES: drawers) in the new content, or edit the file in Emacs."
+                          )
+    "append-note" -> withParsed parseEdit $ \(nid, content, expected) ->
+      mutateNote env nid expected $ \_path old ->
+        if T.null (T.strip content)
+          then Left "nothing to append: content is empty"
+          else Right (appendBody old content)
     _ -> pure (Left ("unknown tool: " <> name))
   where
     withParsed :: (Object -> Parser a) -> (a -> IO (Either Text Value)) -> IO (Either Text Value)
@@ -163,6 +246,67 @@ callTool env name args = do
         <$> o .: "title"
         <*> o .:? "content" .!= ""
         <*> o .:? "tags" .!= []
+    parseEdit o =
+      (,,)
+        <$> o .: "id"
+        <*> o .: "content"
+        <*> o .: "hash"
+
+-- | Shared harness for the mutating tools: resolve the note, apply the
+-- check-then-refuse policy (file-level notes only; the file's current hash
+-- must match the one the caller got from read-note), then run the pure edit
+-- and write the result atomically. Conflicts come back as tool errors so
+-- the agent can re-read and retry.
+mutateNote
+  :: Env
+  -> Text
+  -> Text
+  -> (FilePath -> Text -> Either Text Text)
+  -> IO (Either Text Value)
+mutateNote env nid expected edit =
+  getNode (envDb env) nid >>= \case
+    Nothing -> pure (Left ("no note with ID " <> nid))
+    Just n
+      | nrLevel n /= 0 ->
+          pure . Left $
+            "note "
+              <> nid
+              <> " is a headline inside "
+              <> T.pack (nrFile n)
+              <> "; only file-level notes can be modified"
+      | otherwise -> do
+          bytes <- BS.readFile (nrFile n)
+          if sha256Hex bytes /= expected
+            then
+              pure . Left $
+                "conflict: "
+                  <> T.pack (nrFile n)
+                  <> " changed since it was read; call read-note again and retry with the new hash"
+            else case edit (nrFile n) (TE.decodeUtf8Lenient bytes) of
+              Left err -> pure (Left err)
+              Right new -> do
+                let newBytes = TE.encodeUtf8 new
+                atomicWrite (nrFile n) newBytes
+                refreshIndex (envDb env) (envNotesDir env)
+                pure . Right $
+                  object
+                    ["id" .= nid, "file" .= nrFile n, "hash" .= sha256Hex newBytes]
+
+-- | Write via a temp file in the same directory + rename, so a crash never
+-- leaves a half-written note (decided policy: atomic writes).
+atomicWrite :: FilePath -> ByteString -> IO ()
+atomicWrite path bytes = do
+  let tmp = path <.> "tmp"
+  BS.writeFile tmp bytes
+  renameFile tmp path
+
+sha256Hex :: ByteString -> Text
+sha256Hex = T.pack . BS.foldr step [] . SHA256.hash
+  where
+    step b acc =
+      intToDigit (fromIntegral (b `shiftR` 4))
+        : intToDigit (fromIntegral (b .&. 0x0f))
+        : acc
 
 slugify :: Text -> Text
 slugify title =

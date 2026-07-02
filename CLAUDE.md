@@ -71,9 +71,16 @@ Postgres (tsvector FTS + pgvector) → MCP tools over stdio.
   to stderr (printing to stdout corrupts the MCP stream). Notifications
   (requests without `id`) must never be answered.
 - `src/Dross/Tools.hs` — tool schemas + implementations (`search`,
-  `read-note`, `backlinks`, `create-note`). Tool results are JSON encoded
-  into a single MCP text content block; tool failures return
-  `isError: true` rather than JSON-RPC errors.
+  `read-note`, `backlinks`, `create-note`, `update-note`, `append-note`).
+  Tool results are JSON encoded into a single MCP text content block; tool
+  failures return `isError: true` rather than JSON-RPC errors. Mutations
+  follow the decided write policy: atomic temp-file+rename writes and hash
+  check-then-refuse — `read-note` returns the file's SHA-256 (hex);
+  `update-note`/`append-note` require it and refuse if the file changed
+  (the agent re-reads and retries). File-level notes only; `update-note`
+  also refuses edits that would drop node IDs still present in the file.
+  The raw-text surgery is pure (`src/Dross/Org/Edit.hs`) and covered by
+  the test suite.
 - `db/schema.sql` — canonical schema, applied via `make db-migrate`; every
   statement must stay idempotent (`IF NOT EXISTS` / `ON CONFLICT`). The
   `embeddings` table is `vector(1024)` for voyage-3.5.

@@ -3,10 +3,12 @@ module Main (main) where
 import Control.Monad (unless)
 import Data.IORef
 import Data.Map.Strict qualified as Map
+import Data.Maybe (listToMaybe)
 import Data.Text (Text)
 import Data.Text qualified as T
 import System.Exit
 
+import Dross.Org.Edit
 import Dross.Org.Parser
 import Dross.Org.Types
 
@@ -66,6 +68,72 @@ main = do
     , Link (IdTarget "third") Nothing
     ]
     (extractLinks (hlBody child))
+
+  check
+    "node ids"
+    ["file-id-123", "hl-id-456"]
+    (documentNodeIds doc)
+
+  -- Edit: splitMetadata keeps the drawer + keyword lines, nothing else.
+  check
+    "splitMetadata meta"
+    [ ":PROPERTIES:"
+    , ":ID: file-id-123"
+    , ":END:"
+    , "#+title: Sample Note"
+    , "#+filetags: :dross:test:"
+    ]
+    (fst (splitMetadata sample))
+  check
+    "splitMetadata body head"
+    (Just "")
+    (listToMaybe (snd (splitMetadata sample)))
+
+  -- A #+begin_src line is not a keyword and must stay in the body.
+  let srcSample =
+        T.unlines
+          [ ":PROPERTIES:"
+          , ":ID: src-note"
+          , ":END:"
+          , "#+title: Src"
+          , "#+begin_src haskell"
+          , "main = pure ()"
+          , "#+end_src"
+          ]
+  check
+    "splitMetadata stops at begin_src"
+    ([":PROPERTIES:", ":ID: src-note", ":END:", "#+title: Src"], Just "#+begin_src haskell")
+    (let (m, b) = splitMetadata srcSample in (m, listToMaybe b))
+
+  -- replaceBody keeps metadata verbatim and swaps the body.
+  let updated = replaceBody sample "New body text."
+  check
+    "replaceBody"
+    ( T.unlines
+        [ ":PROPERTIES:"
+        , ":ID: file-id-123"
+        , ":END:"
+        , "#+title: Sample Note"
+        , "#+filetags: :dross:test:"
+        , ""
+        , "New body text."
+        ]
+    )
+    updated
+  check
+    "replaceBody reparses with same id"
+    (Right (Just "file-id-123"))
+    (documentId <$> parseDocument "sample.org" updated)
+  check
+    "replaceBody empty body keeps metadata only"
+    5
+    (length (T.lines (replaceBody sample "")))
+
+  -- appendBody separates with exactly one blank line and ends with newline.
+  check
+    "appendBody"
+    (T.stripEnd sample <> "\n\nAppended paragraph.\n")
+    (appendBody sample "Appended paragraph.\n")
 
   n <- readIORef failures
   if n == 0

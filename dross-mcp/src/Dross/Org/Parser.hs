@@ -8,6 +8,7 @@
 -- property drawer degrades to body text rather than failing the document.
 module Dross.Org.Parser
   ( parseDocument
+  , parseKeyword
   , extractLinks
   ) where
 

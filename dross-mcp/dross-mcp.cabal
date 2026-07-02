@@ -21,6 +21,7 @@ library
     exposed-modules:
         Dross.Org.Types
         Dross.Org.Parser
+        Dross.Org.Edit
         Dross.Index
         Dross.Mcp.Protocol
         Dross.Mcp.Server
