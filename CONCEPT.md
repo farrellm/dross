@@ -39,6 +39,8 @@ Lives in the `dross-mcp/` directory.
   - `similar-notes` — embedding-similar notes to a given note (link-suggestion candidates)
   - `read-note` / `create-note` / `append-note` / `update-note`
   - `backlinks` / `forward-links` / `neighborhood` (n-hop link graph around a note)
+  - `stale-notes` / `recent-notes` — least/most recently modified notes
+    (gardening pool, digest raw material)
   - `capture` — append to inbox with timestamp and source metadata
   - `archive-document` — store a file/URL, create its literature note
 - Maintains its own index (PostgreSQL: full-text via `tsvector`, vectors via
@@ -196,10 +198,35 @@ Roughly ordered by value:
   `similar-notes` all cover them, attributing hits to the literature note.
   A dotfile name keeps org-attach listings clean; a sidecar can also be
   dropped into an attach dir by hand and is picked up on the next sweep.
+- Git auto-commit: every mutating tool commits **only the files it
+  touched** (concurrent Emacs edits are never swept in) on the current
+  branch, message `dross: <tool>: <title>`, gpg signing forced off so a
+  prompt can never hang the server. Failures are logged and swallowed —
+  the note is already on disk. Notes dir not a git repo = auto-commit
+  disabled with a stderr notice, everything else unaffected.
 - Proposal staging: **git branch per proposal** (`proposal/<id>`). Approve =
   merge to main (fast-forward when possible); reject = delete branch. Diffs,
   conflict detection, and audit come free from git; the Telegram approval
   message shows the branch's diff summary.
+- Proposal mechanics: jobs stage proposals in a **temporary `git worktree`**
+  of the notes repo, so the live checkout never leaves the user's branch
+  and a crashed job leaves only an inert branch. `dross-bot propose
+  <branch>` announces it (diff summary + inline Approve/Reject); the
+  serving bot handles the button callbacks — approve merges into the
+  current checkout and deletes the branch (failed merges abort cleanly and
+  keep the branch), reject deletes it. Callback data is validated hard:
+  `proposal/` prefix, conservative slug charset, ≤56 chars (Telegram's
+  64-byte callback limit).
+- Proactive jobs (digest / gardening / synthesis) are **cron + headless
+  Claude** (`proactive/run-job.sh` + per-job prompt files, which *are* the
+  job definitions): `claude -p` composes over the dross MCP tools with an
+  explicit tool allowlist, and delivery goes through the bot's one-shot
+  `dross-bot send` / `dross-bot propose` modes — the bot stays the only
+  component that talks to Telegram. Digest and gardening are read-only;
+  only synthesis stages proposals.
+- Capture nudges: the bot's capture confirmation appends "connects to"
+  lines from `similar-notes` (score ≥ 0.5, not already linked, top 3),
+  best-effort — nudge failures never block the capture.
 - Inbox: a **single `inbox.org`** in the notes root (`#+filetags: :inbox:`,
   bootstrapped on first capture); each capture is a top-level headline with
   its own `:ID:`, a `:CREATED:` timestamp, and optional `:SOURCE:`.

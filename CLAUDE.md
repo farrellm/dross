@@ -36,14 +36,22 @@ Telegram bot, all from `dross-bot/`:
 ```sh
 go build -o dross-bot .   # single static binary
 go vet ./...
-go test ./...             # MCP-client smoke test; needs DROSS_MCP_BIN + running DB, skips otherwise
+go test ./...             # git-proposal + splitter tests always run; the MCP smoke test needs DROSS_MCP_BIN + running DB, skips otherwise
 TELEGRAM_TOKEN=... DROSS_NOTES_DIR=~/notes DROSS_TELEGRAM_CHAT_ID=<id> ./dross-bot
+./dross-bot send < msg.txt          # one-shot: deliver stdin to the chat
+./dross-bot propose proposal/<slug> # one-shot: announce a proposal branch with Approve/Reject buttons
 ```
 
 The bot spawns `dross-mcp` (found on PATH, or `DROSS_MCP_BIN`) and calls
-its tools over stdio — it never writes org files itself. With
+its tools over stdio — it never writes org files itself (exception: the
+proposal buttons run `git merge` / `git branch -D` in the notes repo). With
 `DROSS_TELEGRAM_CHAT_ID` unset it refuses captures and replies with the
 sender's chat ID (first-time setup).
+
+Proactive jobs: `proactive/run-job.sh <digest|gardening|synthesis>` — cron
++ headless `claude -p` over the dross MCP tools, delivered via the bot's
+one-shot modes. The prompt files in `proactive/prompts/` are the job
+definitions.
 
 Smoke test: pipe newline-delimited JSON-RPC into the binary (`initialize`,
 `tools/list`, `tools/call`), then inspect the index with `make db-psql` or
@@ -89,8 +97,9 @@ Postgres (tsvector FTS + pgvector) → MCP tools over stdio.
   (requests without `id`) must never be answered.
 - `src/Dross/Tools.hs` — tool schemas + implementations (`search`,
   `semantic-search`, `similar-notes`, `read-note`, `backlinks`,
-  `forward-links`, `neighborhood`, `create-note`, `update-note`,
-  `append-note`, `capture`, `archive-document`).
+  `forward-links`, `neighborhood`, `stale-notes`, `recent-notes`,
+  `create-note`, `update-note`, `append-note`, `capture`,
+  `archive-document`).
   Tool results are JSON encoded into a single MCP text content block; tool
   failures return `isError: true` rather than JSON-RPC errors. Mutations
   follow the decided write policy: atomic temp-file+rename writes and hash
@@ -115,11 +124,24 @@ Postgres (tsvector FTS + pgvector) → MCP tools over stdio.
   literature note; deliberately *not* FK'd to `nodes` so they survive the
   note file's delete-and-reinsert re-index. `search`, `semantic-search`,
   and `similar-notes` all union them in.
-- `dross-bot/` — Go Telegram capture bot (`main.go` telegram wiring,
-  `mcp.go` minimal MCP stdio client). It is an MCP *client*: it spawns
-  `dross-mcp` and routes text/forwards to `capture` and photos/files to
+- `src/Dross/Git.hs` — auto-commit (decided policy: every mutation is a
+  commit). Commits only the touched paths on the current branch; all git
+  output captured (stdout is the MCP stream); failures logged, never
+  fatal. `Env`'s `envGit` is detected once at startup.
+- `dross-bot/` — Go Telegram bot (`main.go` telegram wiring + capture,
+  `mcp.go` minimal MCP stdio client, `outbound.go` one-shot `send`,
+  `proposal.go` proposal announce/approve/reject). It is an MCP *client*:
+  it spawns `dross-mcp` and routes text/forwards to `capture` (reply
+  includes similar-notes nudges, best-effort) and photos/files to
   `archive-document`, so the write policy stays server-side. Single shared
   subprocess guarded by a mutex; restarted once on transport failure.
+  Proposal callbacks run git in the notes repo; branch names are validated
+  (`proposal/` prefix, slug charset, ≤56 chars) because callback data
+  crosses the network.
+- `proactive/` — stage-4 scheduled jobs: `run-job.sh` +
+  `prompts/{digest,gardening,synthesis}.md`. Prompts are the job
+  definitions; synthesis stages proposal branches via a temp git worktree
+  (the live checkout never switches branches).
 - `docs/notes-CLAUDE.md` — template CLAUDE.md for the *notes* repository:
   Zettelkasten discipline plus the agent-side workflows (inbox processing,
   link suggestion via `similar-notes`, Q&A with citations, literature-note

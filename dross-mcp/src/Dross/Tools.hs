@@ -30,6 +30,7 @@ import System.Directory (copyFile, createDirectoryIfMissing, doesFileExist, rena
 import System.FilePath (takeFileName, (<.>), (</>))
 
 import Dross.Embed (EmbedConfig (..), InputType (..), embedTexts)
+import Dross.Git (autoCommit)
 import Dross.Index
 import Dross.Org.Edit
 import Dross.Org.Parser (parseDocument)
@@ -41,6 +42,9 @@ data Env = Env
   , envEmbed :: Maybe EmbedConfig
     -- ^ Nothing when VOYAGE_API_KEY is unset; semantic-search is disabled
     -- but everything else works (local-first).
+  , envGit :: Bool
+    -- ^ True when the notes dir is a git work tree: every mutation is
+    -- auto-committed (decided policy). False = plain directory, no commits.
   }
 
 toolDefs :: [Value]
@@ -266,6 +270,46 @@ toolDefs =
           ]
       )
   , tool
+      "stale-notes"
+      "File-level notes least recently modified, oldest first -- the resurfacing pool for review/gardening. Returns note IDs, titles, files, and last-modified timestamps."
+      ( object
+          [ "type" .= t "object"
+          , "properties"
+              .= object
+                [ "tag"
+                    .= object
+                      [ "type" .= t "string"
+                      , "description" .= t "Only notes carrying this tag (optional)"
+                      ]
+                , "limit"
+                    .= object
+                      [ "type" .= t "integer"
+                      , "description" .= t "Maximum number of results (default 10)"
+                      ]
+                ]
+          ]
+      )
+  , tool
+      "recent-notes"
+      "File-level notes modified in the last N days, newest first -- raw material for digests. Returns note IDs, titles, files, and last-modified timestamps."
+      ( object
+          [ "type" .= t "object"
+          , "properties"
+              .= object
+                [ "days"
+                    .= object
+                      [ "type" .= t "integer"
+                      , "description" .= t "How many days back to look (default 7)"
+                      ]
+                , "limit"
+                    .= object
+                      [ "type" .= t "integer"
+                      , "description" .= t "Maximum number of results (default 50)"
+                      ]
+                ]
+          ]
+      )
+  , tool
       "capture"
       "Append a raw capture to the inbox (inbox.org, created on first use). Each capture becomes a timestamped headline with its own org ID. No hash needed: capture is append-only."
       ( object
@@ -439,17 +483,35 @@ callTool env name args = do
                            | (s, dst, descr) <- es
                            ]
                     ]
+    "stale-notes" -> withParsed (\o -> (,) <$> o .:? "tag" <*> o .:? "limit" .!= (10 :: Int)) $
+      \(mtag, limit) -> do
+        rows <- staleNotes (envDb env) mtag limit
+        pure . Right . toJSON $
+          [ object ["id" .= i, "title" .= title, "file" .= file, "mtime" .= mtime]
+          | (i, title, file, mtime) <- rows
+          ]
+    "recent-notes" -> withParsed (\o -> (,) <$> o .:? "days" .!= (7 :: Int) <*> o .:? "limit" .!= (50 :: Int)) $
+      \(days, limit) ->
+        if days < 1
+          then pure (Left "days must be at least 1")
+          else do
+            rows <- recentNotes (envDb env) days limit
+            pure . Right . toJSON $
+              [ object ["id" .= i, "title" .= title, "file" .= file, "mtime" .= mtime]
+              | (i, title, file, mtime) <- rows
+              ]
     "create-note" -> withParsed parseCreate $ \(title, content, tags) -> do
       nid <- UUID.toText <$> V4.nextRandom
       path <- freshPath (envNotesDir env) (slugify title) nid
       let bytes = TE.encodeUtf8 (renderNote nid [] title tags content)
       atomicWrite path bytes
+      commitMutation env ("dross: create-note: " <> title) [path]
       refreshIndex (envDb env) (envNotesDir env)
       pure . Right $ object ["id" .= nid, "file" .= path, "hash" .= sha256Hex bytes]
     "update-note" -> withParsed parseUpdate $ \(nid, expected, mcontent, mtitle, mtags) ->
       case validateUpdate mcontent mtitle mtags of
         Left err -> pure (Left err)
-        Right () -> mutateNote env nid expected $ \path old ->
+        Right () -> mutateNote env "update-note" nid expected $ \path old ->
           let (meta, bodyLines) = splitMetadata old
               meta' =
                 maybe id (\ti -> setKeyword "title" (Just ti)) mtitle
@@ -458,7 +520,7 @@ callTool env name args = do
               body = fromMaybe (T.intercalate "\n" bodyLines) mcontent
            in checkedRewrite path old (renderFile meta' body)
     "append-note" -> withParsed parseEdit $ \(nid, content, expected) ->
-      mutateNote env nid expected $ \_path old ->
+      mutateNote env "append-note" nid expected $ \_path old ->
         if T.null (T.strip content)
           then Left "nothing to append: content is empty"
           else Right (appendBody old content)
@@ -484,6 +546,7 @@ callTool env name args = do
           let entry = renderCapture nid ts mtitle msource content
               newBytes = TE.encodeUtf8 (appendBody old entry)
           atomicWrite path newBytes
+          commitMutation env ("dross: capture: " <> fromMaybe ts mtitle) [path]
           refreshIndex (envDb env) (envNotesDir env)
           pure . Right $ object ["id" .= nid, "file" .= path, "hash" .= sha256Hex newBytes]
     -- Like create-note, this writes a brand-new note file (no existing
@@ -524,6 +587,8 @@ callTool env name args = do
                     TE.encodeUtf8 $
                       renderNote nid props title (["literature"] <> tags <> ["ATTACH"]) body
               atomicWrite notePath bytes
+              commitMutation env ("dross: archive-document: " <> title) $
+                [notePath, target] <> [attachDir </> extractFileName | hasExtract]
               refreshIndex (envDb env) (envNotesDir env)
               pure . Right $
                 object
@@ -644,14 +709,16 @@ checkedRewrite path old new = case parseDocument path new of
 -- check-then-refuse policy (file-level notes only; the file's current hash
 -- must match the one the caller got from read-note), then run the pure edit
 -- and write the result atomically. Conflicts come back as tool errors so
--- the agent can re-read and retry.
+-- the agent can re-read and retry. @tool@ names the caller for the
+-- auto-commit message.
 mutateNote
   :: Env
   -> Text
   -> Text
+  -> Text
   -> (FilePath -> Text -> Either Text Text)
   -> IO (Either Text Value)
-mutateNote env nid expected edit =
+mutateNote env tool nid expected edit =
   getNode (envDb env) nid >>= \case
     Nothing -> pure (Left ("no note with ID " <> nid))
     Just n
@@ -675,10 +742,17 @@ mutateNote env nid expected edit =
               Right new -> do
                 let newBytes = TE.encodeUtf8 new
                 atomicWrite (nrFile n) newBytes
+                commitMutation env ("dross: " <> tool <> ": " <> nrTitle n) [nrFile n]
                 refreshIndex (envDb env) (envNotesDir env)
                 pure . Right $
                   object
                     ["id" .= nid, "file" .= nrFile n, "hash" .= sha256Hex newBytes]
+
+-- | Auto-commit a mutation's files when the notes dir is a git repo
+-- (decided policy: every agent-initiated change is a commit).
+commitMutation :: Env -> Text -> [FilePath] -> IO ()
+commitMutation env msg paths =
+  when (envGit env) $ autoCommit (envNotesDir env) msg paths
 
 -- | Write via a temp file in the same directory + rename, so a crash never
 -- leaves a half-written note (decided policy: atomic writes).

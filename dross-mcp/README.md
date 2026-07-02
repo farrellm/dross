@@ -2,7 +2,7 @@
 
 Haskell MCP server for the Dross note archive (see `../CONCEPT.md`).
 
-## Status: Augment (roadmap stage 3)
+## Status: Proactive (roadmap stage 4)
 
 Working:
 
@@ -18,9 +18,14 @@ Working:
   `semantic-search` (Voyage embeddings + pgvector cosine distance),
   `similar-notes` (embedding-similar notes to a given note, with a `linked`
   flag — link-suggestion candidates), `read-note`, `backlinks`,
-  `forward-links`, `neighborhood`, `create-note`, `update-note`,
-  `append-note`, `capture`, `archive-document`. Mutations follow the
-  check-then-refuse write policy (hash from `read-note`).
+  `forward-links`, `neighborhood`, `stale-notes` / `recent-notes`
+  (least/most recently modified — gardening and digest raw material),
+  `create-note`, `update-note`, `append-note`, `capture`,
+  `archive-document`. Mutations follow the check-then-refuse write policy
+  (hash from `read-note`).
+- **Git auto-commit**: when the notes dir is a git repo, every mutation is
+  committed — only the touched files, message `dross: <tool>: <title>`,
+  signing disabled. Not a repo = disabled with a stderr notice.
 - **Embeddings** (`Dross.Chunk` + `Dross.Embed`): notes are chunked at
   headline level during indexing; vectors are fetched from Voyage
   (`voyage-3.5`) lazily inside `semantic-search` / `similar-notes`, keyed
@@ -34,9 +39,8 @@ Working:
   so `search`, `semantic-search`, and `similar-notes` cover the archive.
 - **Workflows**: `../docs/notes-CLAUDE.md` is the CLAUDE.md template for
   the notes repo — link suggestion, Q&A with citations, literature-note
-  drafting.
-
-Not yet wired: git auto-commit.
+  drafting. Scheduled proactive jobs (digest, gardening, synthesis with
+  Telegram-approved proposals) live in `../proactive/`.
 
 ## Database (Docker)
 

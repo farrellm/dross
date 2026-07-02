@@ -9,6 +9,7 @@ import System.IO (hPutStrLn, stderr)
 import Data.Text qualified as T
 
 import Dross.Embed (EmbedConfig (..), newEmbedConfig)
+import Dross.Git (isGitRepo)
 import Dross.Index (checkSchema, connectDb, refreshIndex)
 import Dross.Mcp.Server (runServer)
 import Dross.Tools (Env (..))
@@ -40,5 +41,8 @@ main = do
       cfg <- newEmbedConfig (T.pack key) (T.pack <$> modelOverride) urlOverride
       hPutStrLn stderr ("dross-mcp: embeddings enabled (" <> T.unpack (embedModel cfg) <> ")")
       pure (Just cfg)
+  git <- isGitRepo dir'
+  unless git $
+    hPutStrLn stderr "dross-mcp: notes dir is not a git repo — auto-commit disabled"
   hPutStrLn stderr ("dross-mcp serving " <> dir')
-  runServer (Env dir' conn embed)
+  runServer (Env dir' conn embed git)

@@ -1,13 +1,16 @@
 package main
 
-// dross-bot: Telegram capture frontend for Dross (CONCEPT.md, roadmap
-// phase 2). Inbound only for now: text/links/forwards are appended to the
-// inbox via the MCP server's capture tool; photos and files are archived
-// via archive-document. Outbound digests and proposal approval arrive in
-// later phases.
+// dross-bot: Telegram frontend for Dross (CONCEPT.md, roadmap phases 2+4).
+// Inbound: text/links/forwards are appended to the inbox via the MCP
+// server's capture tool (with "connects to" nudges from similar-notes);
+// photos and files are archived via archive-document. Outbound: one-shot
+// `send` and `propose <branch>` modes for the scheduled proactive jobs
+// (../proactive/), and inline Approve/Reject buttons on proposals handled
+// here via git in the notes repo.
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"log"
@@ -15,7 +18,6 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"time"
 
@@ -24,14 +26,33 @@ import (
 )
 
 type app struct {
-	mcp     *mcpClient
-	allowed map[int64]bool // empty = unconfigured: refuse and tell the sender their chat ID
+	mcp      *mcpClient
+	notesDir string
+	allowed  map[int64]bool // empty = unconfigured: refuse and tell the sender their chat ID
 }
 
 func main() {
 	log.SetFlags(log.LstdFlags)
 	log.SetPrefix("dross-bot: ")
 
+	if len(os.Args) > 1 {
+		switch os.Args[1] {
+		case "send":
+			runSend()
+		case "propose":
+			if len(os.Args) != 3 {
+				log.Fatal("usage: dross-bot propose <proposal-branch>")
+			}
+			runPropose(os.Args[2])
+		default:
+			log.Fatalf("unknown command %q (send, propose, or no arguments to serve)", os.Args[1])
+		}
+		return
+	}
+	serve()
+}
+
+func serve() {
 	token := os.Getenv("TELEGRAM_TOKEN")
 	if token == "" {
 		log.Fatal("TELEGRAM_TOKEN is not set")
@@ -46,22 +67,14 @@ func main() {
 	}
 
 	allowed := map[int64]bool{}
-	for _, s := range strings.Split(os.Getenv("DROSS_TELEGRAM_CHAT_ID"), ",") {
-		s = strings.TrimSpace(s)
-		if s == "" {
-			continue
-		}
-		id, err := strconv.ParseInt(s, 10, 64)
-		if err != nil {
-			log.Fatalf("DROSS_TELEGRAM_CHAT_ID: bad chat id %q", s)
-		}
+	for _, id := range parseChatIDs(os.Getenv("DROSS_TELEGRAM_CHAT_ID")) {
 		allowed[id] = true
 	}
 	if len(allowed) == 0 {
 		log.Print("DROSS_TELEGRAM_CHAT_ID unset — will refuse captures and report chat IDs")
 	}
 
-	a := &app{mcp: newMcpClient(mcpBin, notesDir), allowed: allowed}
+	a := &app{mcp: newMcpClient(mcpBin, notesDir), notesDir: notesDir, allowed: allowed}
 	if err := a.mcp.Start(); err != nil {
 		log.Fatalf("cannot start MCP server: %v", err)
 	}
@@ -78,6 +91,10 @@ func main() {
 }
 
 func (a *app) handle(ctx context.Context, b *bot.Bot, update *models.Update) {
+	if update.CallbackQuery != nil {
+		a.handleCallback(ctx, b, update.CallbackQuery)
+		return
+	}
 	msg := update.Message
 	if msg == nil {
 		return
@@ -115,11 +132,52 @@ func (a *app) captureText(ctx context.Context, b *bot.Bot, msg *models.Message) 
 		"content": msg.Text,
 		"source":  source(msg),
 	}
-	if _, err := a.mcp.CallTool("capture", args); err != nil {
+	res, err := a.mcp.CallTool("capture", args)
+	if err != nil {
 		replyErr(ctx, b, msg, err)
 		return
 	}
-	reply(ctx, b, msg, "Captured to inbox.")
+	text := "Captured to inbox."
+	if related := a.relatedNotes(res); related != "" {
+		text += "\n\nConnects to:\n" + related
+	}
+	reply(ctx, b, msg, text)
+}
+
+// Nudge scores below this are noise; similar-notes returns cosine
+// similarity in [0,1].
+const nudgeThreshold = 0.5
+
+// relatedNotes turns a fresh capture into a "connects to" nudge via
+// similar-notes. Best-effort: any failure (semantic search disabled, Voyage
+// down) just drops the nudge, never the capture confirmation.
+func (a *app) relatedNotes(captureResult string) string {
+	var cap struct {
+		ID string `json:"id"`
+	}
+	if err := json.Unmarshal([]byte(captureResult), &cap); err != nil || cap.ID == "" {
+		return ""
+	}
+	out, err := a.mcp.CallTool("similar-notes", map[string]any{"id": cap.ID, "limit": 3})
+	if err != nil {
+		log.Printf("similar-notes nudge skipped: %v", err)
+		return ""
+	}
+	var hits []struct {
+		Title  string  `json:"title"`
+		Score  float64 `json:"score"`
+		Linked bool    `json:"linked"`
+	}
+	if err := json.Unmarshal([]byte(out), &hits); err != nil {
+		return ""
+	}
+	var lines []string
+	for _, h := range hits {
+		if h.Score >= nudgeThreshold && !h.Linked {
+			lines = append(lines, fmt.Sprintf("• %s (%.2f)", h.Title, h.Score))
+		}
+	}
+	return strings.Join(lines, "\n")
 }
 
 func (a *app) archivePhoto(ctx context.Context, b *bot.Bot, msg *models.Message) {

@@ -19,6 +19,8 @@ module Dross.Index
   , embedPending
   , semanticSearch
   , similarNotes
+  , staleNotes
+  , recentNotes
   , NodeRow (..)
   ) where
 
@@ -275,6 +277,33 @@ neighborhood conn nid depth = do
       \WHERE src = ANY(?) AND dst = ANY(?) ORDER BY src, dst"
       (ids, ids)
   pure (nodes, edges)
+
+-- | File-level notes least recently modified (mtime recorded at indexing,
+-- which tracks content changes), optionally restricted to a tag — the
+-- resurfacing pool for gardening.
+staleNotes :: Connection -> Maybe Text -> Int -> IO [(Text, Text, FilePath, UTCTime)]
+staleNotes conn mtag limit =
+  query
+    conn
+    "SELECT n.id, n.title, n.file, f.mtime \
+    \FROM nodes n JOIN files f ON f.path = n.file \
+    \WHERE n.level = 0 AND (?::text IS NULL OR ? = ANY(n.tags)) \
+    \ORDER BY f.mtime ASC, n.title \
+    \LIMIT ?"
+    (mtag, mtag, limit)
+
+-- | File-level notes whose file changed within the last @days@ days,
+-- newest first — digest raw material.
+recentNotes :: Connection -> Int -> Int -> IO [(Text, Text, FilePath, UTCTime)]
+recentNotes conn days limit =
+  query
+    conn
+    "SELECT n.id, n.title, n.file, f.mtime \
+    \FROM nodes n JOIN files f ON f.path = n.file \
+    \WHERE n.level = 0 AND f.mtime >= now() - (? * interval '1 day') \
+    \ORDER BY f.mtime DESC, n.title \
+    \LIMIT ?"
+    (days, limit)
 
 -- | Notes the given ID links to. Dangling targets (an @[[id:...]]@ link to
 -- a note not in the index) come back with NULL title and file.

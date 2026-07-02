@@ -24,6 +24,7 @@ library
         Dross.Org.Edit
         Dross.Chunk
         Dross.Embed
+        Dross.Git
         Dross.Index
         Dross.Mcp.Protocol
         Dross.Mcp.Server
@@ -41,6 +42,7 @@ library
         http-types,
         megaparsec >=9.5,
         postgresql-simple >=0.7,
+        process,
         text >=2.0,
         time,
         uuid >=1.3

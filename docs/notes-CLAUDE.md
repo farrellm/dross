@@ -9,9 +9,10 @@ see `CONCEPT.md` in the dross repo for the system design.
 - All reads and writes go through the dross MCP tools (`search`,
   `semantic-search`, `similar-notes`, `read-note`, `create-note`,
   `update-note`, `append-note`, `capture`, `archive-document`,
-  `backlinks`, `forward-links`, `neighborhood`) — never edit org files
-  directly. If `update-note`/`append-note` report a hash conflict, re-read
-  the note and retry.
+  `backlinks`, `forward-links`, `neighborhood`, `stale-notes`,
+  `recent-notes`) — never edit org files directly. If
+  `update-note`/`append-note` report a hash conflict, re-read the note and
+  retry.
 - You may capture and *propose* freely; restructuring, retagging, splitting,
   or deleting existing permanent notes needs my explicit approval first.
 - Cite notes as org links: `[[id:<uuid>][<note title>]]`.
