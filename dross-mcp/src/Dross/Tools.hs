@@ -107,6 +107,27 @@ toolDefs =
           ]
       )
   , tool
+      "neighborhood"
+      "The link graph around a note: every note within `depth` hops following links in either direction (with its hop distance from the root), plus the links among them. Dangling link targets have null title and file."
+      ( object
+          [ "type" .= t "object"
+          , "properties"
+              .= object
+                [ "id"
+                    .= object
+                      [ "type" .= t "string"
+                      , "description" .= t "The root note's org :ID: property"
+                      ]
+                , "depth"
+                    .= object
+                      [ "type" .= t "integer"
+                      , "description" .= t "Maximum hops from the root, 1-10 (default 2)"
+                      ]
+                ]
+          , "required" .= [t "id"]
+          ]
+      )
+  , tool
       "create-note"
       "Create a new note file with a generated org ID. Returns the new note's ID, file path, and content hash (usable with update-note / append-note)."
       ( object
@@ -240,6 +261,26 @@ callTool env name args = do
         [ object ["id" .= i, "title" .= title, "file" .= file, "description" .= descr]
         | (i, title, file, descr) <- rows
         ]
+    "neighborhood" -> withParsed (\o -> (,) <$> o .: "id" <*> o .:? "depth" .!= (2 :: Int)) $
+      \(nid, depth) ->
+        if depth < 1 || depth > 10
+          then pure (Left "depth must be between 1 and 10")
+          else
+            getNode (envDb env) nid >>= \case
+              Nothing -> pure (Left ("no note with ID " <> nid))
+              Just _ -> do
+                (ns, es) <- neighborhood (envDb env) nid depth
+                pure . Right $
+                  object
+                    [ "nodes"
+                        .= [ object ["id" .= i, "title" .= title, "file" .= file, "distance" .= d]
+                           | (i, title, file, d) <- ns
+                           ]
+                    , "edges"
+                        .= [ object ["from" .= s, "to" .= dst, "description" .= descr]
+                           | (s, dst, descr) <- es
+                           ]
+                    ]
     "create-note" -> withParsed parseCreate $ \(title, content, tags) -> do
       nid <- UUID.toText <$> V4.nextRandom
       path <- freshPath (envNotesDir env) (slugify title) nid

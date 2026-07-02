@@ -14,6 +14,7 @@ module Dross.Index
   , getNode
   , backlinks
   , forwardLinks
+  , neighborhood
   , NodeRow (..)
   ) where
 
@@ -164,6 +165,41 @@ backlinks conn nid =
     \FROM links l JOIN nodes n ON n.id = l.src \
     \WHERE l.dst = ? ORDER BY n.title"
     (Only nid)
+
+-- | The n-hop link neighborhood around a note: every node within @depth@
+-- hops of the root following links in either direction (with its hop
+-- distance), plus all links among those nodes. Dangling link targets come
+-- back with NULL title and file, like 'forwardLinks'. The recursive CTE is
+-- bounded by @depth@, which callers must keep small (cycles revisit nodes
+-- at increasing depths until the bound stops them).
+neighborhood
+  :: Connection
+  -> Text
+  -> Int
+  -> IO ([(Text, Maybe Text, Maybe FilePath, Int)], [(Text, Text, Maybe Text)])
+neighborhood conn nid depth = do
+  nodes <-
+    query
+      conn
+      "WITH RECURSIVE hood(id, depth) AS (\
+      \  SELECT ?::text, 0 \
+      \  UNION \
+      \  SELECT CASE WHEN l.src = h.id THEN l.dst ELSE l.src END, h.depth + 1 \
+      \  FROM links l JOIN hood h ON l.src = h.id OR l.dst = h.id \
+      \  WHERE h.depth < ?) \
+      \SELECT h.id, n.title, n.file, min(h.depth)::int \
+      \FROM hood h LEFT JOIN nodes n ON n.id = h.id \
+      \GROUP BY h.id, n.title, n.file \
+      \ORDER BY min(h.depth), n.title"
+      (nid, depth)
+  let ids = PGArray [i | (i, _, _, _) <- nodes]
+  edges <-
+    query
+      conn
+      "SELECT src, dst, descr FROM links \
+      \WHERE src = ANY(?) AND dst = ANY(?) ORDER BY src, dst"
+      (ids, ids)
+  pure (nodes, edges)
 
 -- | Notes the given ID links to. Dangling targets (an @[[id:...]]@ link to
 -- a note not in the index) come back with NULL title and file.
