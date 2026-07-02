@@ -175,4 +175,11 @@ Roughly ordered by value:
 - `capture` is append-only and **exempt from the hash check** — it inserts
   fresh content without a prior read, so there is nothing to go stale. All
   other mutations keep check-then-refuse.
+- Document archive: **org-attach uuid-folder layout** —
+  `data/<2 chars>/<rest of id>/` under the notes root, matching Emacs
+  org-attach defaults so `org-attach-open` works. The literature note links
+  to the copy with a relative `file:` link, carries `:SOURCE:` in its
+  drawer, and is tagged `:literature:ATTACH:`. `archive-document` takes a
+  **local file path** — URL fetching and text extraction are the client
+  agent's job; extracted-text indexing arrives with the embeddings phase.
 

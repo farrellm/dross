@@ -6,6 +6,7 @@ module Dross.Tools
   , toolDefs
   , callTool
   , renderCapture
+  , renderNote
   ) where
 
 import Crypto.Hash.SHA256 qualified as SHA256
@@ -24,8 +25,8 @@ import Data.Time (defaultTimeLocale, formatTime, getZonedTime)
 import Data.UUID qualified as UUID
 import Data.UUID.V4 qualified as V4
 import Database.PostgreSQL.Simple (Connection)
-import System.Directory (doesFileExist, renameFile)
-import System.FilePath ((<.>), (</>))
+import System.Directory (copyFile, createDirectoryIfMissing, doesFileExist, renameFile)
+import System.FilePath (takeFileName, (<.>), (</>))
 
 import Dross.Index
 import Dross.Org.Edit
@@ -243,6 +244,43 @@ toolDefs =
           , "required" .= [t "content"]
           ]
       )
+  , tool
+      "archive-document"
+      "Archive a document: copy a local file into the org-attach directory and create a literature note (tagged :literature:ATTACH:) linking to it. For URLs, download the file first and pass its local path."
+      ( object
+          [ "type" .= t "object"
+          , "properties"
+              .= object
+                [ "path"
+                    .= object
+                      [ "type" .= t "string"
+                      , "description" .= t "Absolute path of the local file to archive"
+                      ]
+                , "title"
+                    .= object
+                      [ "type" .= t "string"
+                      , "description" .= t "Literature note title (e.g. the document's title)"
+                      ]
+                , "source"
+                    .= object
+                      [ "type" .= t "string"
+                      , "description" .= t "Where the document came from: URL or citation (optional)"
+                      ]
+                , "content"
+                    .= object
+                      [ "type" .= t "string"
+                      , "description" .= t "Initial note body, e.g. a summary (optional)"
+                      ]
+                , "tags"
+                    .= object
+                      [ "type" .= t "array"
+                      , "items" .= object ["type" .= t "string"]
+                      , "description" .= t "Extra filetags beyond literature/ATTACH (optional)"
+                      ]
+                ]
+          , "required" .= [t "path", t "title"]
+          ]
+      )
   ]
   where
     t :: Text -> Text
@@ -312,7 +350,7 @@ callTool env name args = do
     "create-note" -> withParsed parseCreate $ \(title, content, tags) -> do
       nid <- UUID.toText <$> V4.nextRandom
       path <- freshPath (envNotesDir env) (slugify title) nid
-      let bytes = TE.encodeUtf8 (renderNote nid title tags content)
+      let bytes = TE.encodeUtf8 (renderNote nid [] title tags content)
       atomicWrite path bytes
       refreshIndex (envDb env) (envNotesDir env)
       pure . Right $ object ["id" .= nid, "file" .= path, "hash" .= sha256Hex bytes]
@@ -350,12 +388,52 @@ callTool env name args = do
               then TE.decodeUtf8Lenient <$> BS.readFile path
               else do
                 inboxId <- UUID.toText <$> V4.nextRandom
-                pure (renderNote inboxId "Inbox" ["inbox"] "")
+                pure (renderNote inboxId [] "Inbox" ["inbox"] "")
           let entry = renderCapture nid ts mtitle msource content
               newBytes = TE.encodeUtf8 (appendBody old entry)
           atomicWrite path newBytes
           refreshIndex (envDb env) (envNotesDir env)
           pure . Right $ object ["id" .= nid, "file" .= path, "hash" .= sha256Hex newBytes]
+    -- Like create-note, this writes a brand-new note file (no existing
+    -- note to conflict with), so there is no hash parameter; the copied
+    -- document lands in the org-attach uuid layout Emacs expects.
+    "archive-document" -> withParsed parseArchive $ \(path, title, msource, content, tags) ->
+      case validateArchive title msource tags of
+        Left err -> pure (Left err)
+        Right () -> do
+          srcExists <- doesFileExist path
+          if not srcExists
+            then pure (Left ("no such file: " <> T.pack path))
+            else do
+              nid <- UUID.toText <$> V4.nextRandom
+              let attachRel =
+                    "data" </> T.unpack (T.take 2 nid) </> T.unpack (T.drop 2 nid)
+                  attachDir = envNotesDir env </> attachRel
+                  target = attachDir </> takeFileName path
+              createDirectoryIfMissing True attachDir
+              copyFile path target
+              notePath <- freshPath (envNotesDir env) (slugify title) nid
+              let link :: Text
+                  link =
+                    "[[file:"
+                      <> T.pack (attachRel </> takeFileName path)
+                      <> "]["
+                      <> T.pack (takeFileName path)
+                      <> "]]"
+                  body = link <> (if T.null content then "" else "\n\n" <> content)
+                  props = [("SOURCE", src) | Just src <- [msource]]
+                  bytes =
+                    TE.encodeUtf8 $
+                      renderNote nid props title (["literature"] <> tags <> ["ATTACH"]) body
+              atomicWrite notePath bytes
+              refreshIndex (envDb env) (envNotesDir env)
+              pure . Right $
+                object
+                  [ "id" .= nid
+                  , "file" .= notePath
+                  , "attached" .= target
+                  , "hash" .= sha256Hex bytes
+                  ]
     _ -> pure (Left ("unknown tool: " <> name))
   where
     withParsed :: (Object -> Parser a) -> (a -> IO (Either Text Value)) -> IO (Either Text Value)
@@ -377,6 +455,13 @@ callTool env name args = do
         <$> o .: "content"
         <*> o .:? "title"
         <*> o .:? "source"
+    parseArchive o =
+      (,,,,)
+        <$> o .: "path"
+        <*> o .: "title"
+        <*> o .:? "source"
+        <*> o .:? "content" .!= ""
+        <*> o .:? "tags" .!= []
     parseUpdate o =
       (,,,,)
         <$> o .: "id"
@@ -395,12 +480,23 @@ validateUpdate mcontent mtitle mtags
   | Just tg <- mtags, any badTag tg =
       Left "invalid tags: each tag must be non-empty, with no whitespace or ':'"
   | otherwise = Right ()
-  where
-    badTag tg = T.null tg || T.any (\c -> c == ':' || isSpace c) tg
 
 renderTags :: [Text] -> Maybe Text
 renderTags [] = Nothing
 renderTags tags = Just (":" <> T.intercalate ":" tags <> ":")
+
+validateArchive :: Text -> Maybe Text -> [Text] -> Either Text ()
+validateArchive title msource tags
+  | T.null (T.strip title) || T.any (== '\n') title =
+      Left "invalid title: must be a single non-empty line"
+  | Just src <- msource, T.null (T.strip src) || T.any (== '\n') src =
+      Left "invalid source: must be a single non-empty line"
+  | any badTag tags =
+      Left "invalid tags: each tag must be non-empty, with no whitespace or ':'"
+  | otherwise = Right ()
+
+badTag :: Text -> Bool
+badTag tg = T.null tg || T.any (\c -> c == ':' || isSpace c) tg
 
 validateCapture :: Text -> Maybe Text -> Maybe Text -> Either Text ()
 validateCapture content mtitle msource
@@ -520,13 +616,15 @@ freshPath dir slug nid = do
       then dir </> T.unpack (slug <> "-" <> T.take 8 nid) <.> "org"
       else base
 
-renderNote :: Text -> Text -> [Text] -> Text -> Text
-renderNote nid title tags content =
+renderNote :: Text -> [(Text, Text)] -> Text -> [Text] -> Text -> Text
+renderNote nid extraProps title tags content =
   T.unlines $
     [ ":PROPERTIES:"
     , ":ID: " <> nid
-    , ":END:"
-    , "#+title: " <> title
     ]
+      <> [":" <> k <> ": " <> v | (k, v) <- extraProps]
+      <> [ ":END:"
+         , "#+title: " <> title
+         ]
       <> ["#+filetags: :" <> T.intercalate ":" tags <> ":" | not (null tags)]
       <> (if T.null content then [] else ["", content])

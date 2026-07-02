@@ -75,7 +75,7 @@ Postgres (tsvector FTS + pgvector) → MCP tools over stdio.
   (requests without `id`) must never be answered.
 - `src/Dross/Tools.hs` — tool schemas + implementations (`search`,
   `read-note`, `backlinks`, `forward-links`, `neighborhood`, `create-note`,
-  `update-note`, `append-note`, `capture`).
+  `update-note`, `append-note`, `capture`, `archive-document`).
   Tool results are JSON encoded into a single MCP text content block; tool
   failures return `isError: true` rather than JSON-RPC errors. Mutations
   follow the decided write policy: atomic temp-file+rename writes and hash
@@ -102,9 +102,10 @@ Postgres (tsvector FTS + pgvector) → MCP tools over stdio.
   compiles. Don't "upgrade" back to crypton.
 - Duplicate node IDs across files are resolved with `ON CONFLICT DO
   NOTHING` (first file wins) — deliberate, not an oversight.
-- New mutating tools go through `mutateNote` in `Tools.hs` (hash
-  check-then-refuse, atomic write, re-index) — don't write files directly.
-  `capture` is the one deliberate exception (append-only, no prior read to
-  go stale; see CONCEPT.md Decisions).
+- Tools that modify an existing note go through `mutateNote` in `Tools.hs`
+  (hash check-then-refuse, atomic write, re-index) — don't write files
+  directly. Tools writing *fresh* content (`create-note`,
+  `archive-document`, append-only `capture`) skip the hash but still use
+  `atomicWrite` (see CONCEPT.md Decisions).
 - This machine has no passwordless sudo: for system packages, ask the user
   to run the install themselves (e.g. `! sudo pacman -S ...`).

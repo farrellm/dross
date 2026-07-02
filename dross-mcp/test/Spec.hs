@@ -11,7 +11,7 @@ import System.Exit
 import Dross.Org.Edit
 import Dross.Org.Parser
 import Dross.Org.Types
-import Dross.Tools (renderCapture)
+import Dross.Tools (renderCapture, renderNote)
 
 main :: IO ()
 main = do
@@ -183,6 +183,15 @@ main = do
       hs -> do
         putStrLn ("expected 1 capture headline, got " <> show (length hs))
         exitFailure
+
+  -- renderNote with extra drawer properties (archive-document's :SOURCE:).
+  case parseDocument "lit.org" (renderNote "lit-1" [("SOURCE", "https://x.test")] "A Paper" ["literature", "ATTACH"] "[[file:data/li/t-1/paper.pdf][paper.pdf]]") of
+    Left err -> putStrLn err >> exitFailure
+    Right litDoc -> do
+      check "lit id" (Just "lit-1") (documentId litDoc)
+      check "lit source" (Just "https://x.test") (Map.lookup "SOURCE" (docProperties litDoc))
+      check "lit filetags" ["literature", "ATTACH"] (docFiletags litDoc)
+      check "lit title" (Just "A Paper") (documentTitle litDoc)
 
   n <- readIORef failures
   if n == 0
