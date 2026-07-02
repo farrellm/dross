@@ -10,6 +10,7 @@ module Dross.Index
   , checkSchema
   , refreshIndex
   , listOrgFiles
+  , extractFileName
   , searchNodes
   , getNode
   , backlinks
@@ -17,12 +18,13 @@ module Dross.Index
   , neighborhood
   , embedPending
   , semanticSearch
+  , similarNotes
   , NodeRow (..)
   ) where
 
 import Control.Applicative ((<|>))
 import Control.Exception (try)
-import Control.Monad (forM_, unless, when)
+import Control.Monad (forM, forM_, unless, when)
 import Crypto.Hash.SHA256 qualified as SHA256
 import Data.ByteString (ByteString)
 import Data.ByteString qualified as BS
@@ -36,7 +38,7 @@ import Data.Text.Encoding qualified as TE
 import Data.Time (UTCTime)
 import Database.PostgreSQL.Simple
 import Database.PostgreSQL.Simple.Types (PGArray (..))
-import System.Directory (doesDirectoryExist, getModificationTime, listDirectory)
+import System.Directory (doesDirectoryExist, doesFileExist, getModificationTime, listDirectory)
 import System.Environment (lookupEnv)
 import System.FilePath (takeBaseName, takeExtension, (</>))
 import System.IO (hPutStrLn, stderr)
@@ -62,11 +64,14 @@ checkSchema conn = do
   pure (either (const False) (const True) r)
 
 -- | Bring the index in line with the notes directory: drop rows for deleted
--- files, (re)index files whose content hash changed.
+-- files, (re)index files whose content hash changed. Org files first, then
+-- extracted-text sidecars, so a sidecar arriving together with its
+-- literature note finds the note already indexed.
 refreshIndex :: Connection -> FilePath -> IO ()
 refreshIndex conn notesDir = do
   paths <- listOrgFiles notesDir
-  let live = Set.fromList paths
+  extracts <- listExtractFiles notesDir
+  let live = Set.fromList (paths <> map fst extracts)
   stored <-
     query_ conn "SELECT path, hash FROM files" :: IO [(FilePath, Binary ByteString)]
   let storedMap = Map.fromList [(p, h) | (p, Binary h) <- stored]
@@ -80,6 +85,12 @@ refreshIndex conn notesDir = do
     when (Map.lookup p storedMap /= Just h) $ do
       mtime <- getModificationTime p
       indexFile conn p bytes h mtime
+  forM_ extracts $ \(p, nid) -> do
+    bytes <- BS.readFile p
+    let h = SHA256.hash bytes
+    when (Map.lookup p storedMap /= Just h) $ do
+      mtime <- getModificationTime p
+      indexExtract conn p bytes h mtime nid
 
 indexFile :: Connection -> FilePath -> ByteString -> ByteString -> UTCTime -> IO ()
 indexFile conn path bytes h mtime = withTransaction conn $ do
@@ -140,6 +151,38 @@ indexFile conn path bytes h mtime = withTransaction conn $ do
           ]
       pure ()
 
+-- | Index an extracted-text sidecar into 'doc_chunks', attributed to the
+-- literature note whose ID the attach dir encodes. If that note is not in
+-- the index (dangling sidecar), skip without recording the file hash so the
+-- sidecar is retried once the note appears.
+indexExtract :: Connection -> FilePath -> ByteString -> ByteString -> UTCTime -> Text -> IO ()
+indexExtract conn path bytes h mtime nid =
+  getNode conn nid >>= \case
+    Nothing ->
+      hPutStrLn stderr $
+        "dross-mcp: extract " <> path <> " has no indexed note " <> T.unpack nid <> "; skipping"
+    Just n -> withTransaction conn $ do
+      _ <-
+        execute
+          conn
+          "INSERT INTO files (path, hash, mtime) VALUES (?, ?, ?) \
+          \ON CONFLICT (path) DO UPDATE \
+          \SET hash = excluded.hash, mtime = excluded.mtime, indexed_at = now()"
+          (path, Binary h, mtime)
+      _ <- execute conn "DELETE FROM doc_chunks WHERE path = ?" (Only path)
+      _ <-
+        executeMany
+          conn
+          "INSERT INTO doc_chunks (path, note_id, seq, content, content_sha256) \
+          \VALUES (?, ?, ?, ?, ?)"
+          [ (path, nid, seq_, c, Binary (SHA256.hash (TE.encodeUtf8 c)))
+          | (seq_, c) <-
+              zip
+                [0 :: Int ..]
+                (chunkNode defaultChunkChars (nrTitle n) [TE.decodeUtf8Lenient bytes])
+          ]
+      pure ()
+
 -- Queries ------------------------------------------------------------------
 
 data NodeRow = NodeRow
@@ -153,18 +196,28 @@ data NodeRow = NodeRow
   , nrBody :: Text
   }
 
--- | Full-text search (websearch syntax), with a title substring fallback so
--- partial words still hit.
+-- | Full-text search (websearch syntax) over notes and archived-document
+-- extracts (extract hits are attributed to their literature note), with a
+-- title substring fallback so partial words still hit.
 searchNodes :: Connection -> Text -> Int -> IO [(Text, Text, FilePath)]
 searchNodes conn q limit =
   query
     conn
-    "SELECT id, title, file FROM nodes \
-    \WHERE fts @@ websearch_to_tsquery('english', ?) \
-    \   OR title ILIKE '%' || ? || '%' \
-    \ORDER BY ts_rank(fts, websearch_to_tsquery('english', ?)) DESC, title \
+    "SELECT n.id, n.title, n.file \
+    \FROM nodes n \
+    \JOIN (SELECT id, max(rank) AS rank \
+    \      FROM (SELECT id, ts_rank(fts, websearch_to_tsquery('english', ?)) AS rank \
+    \            FROM nodes \
+    \            WHERE fts @@ websearch_to_tsquery('english', ?) \
+    \               OR title ILIKE '%' || ? || '%' \
+    \            UNION ALL \
+    \            SELECT note_id, ts_rank(fts, websearch_to_tsquery('english', ?)) \
+    \            FROM doc_chunks \
+    \            WHERE fts @@ websearch_to_tsquery('english', ?)) hits \
+    \      GROUP BY id) r ON r.id = n.id \
+    \ORDER BY r.rank DESC, n.title \
     \LIMIT ?"
-    (q, q, q, limit)
+    (q, q, q, q, q, limit)
 
 getNode :: Connection -> Text -> IO (Maybe NodeRow)
 getNode conn nid = do
@@ -236,15 +289,17 @@ forwardLinks conn nid =
 
 -- Embeddings -----------------------------------------------------------------
 
--- | Chunk contents not yet embedded under the given model, deduplicated by
--- content hash (embeddings are keyed by hash + model, so identical content
--- embeds once).
+-- | Chunk contents (note chunks and document-extract chunks) not yet
+-- embedded under the given model, deduplicated by content hash (embeddings
+-- are keyed by hash + model, so identical content embeds once).
 pendingChunks :: Connection -> Text -> IO [(Binary ByteString, Text)]
 pendingChunks conn model =
   query
     conn
     "SELECT DISTINCT ON (c.content_sha256) c.content_sha256, c.content \
-    \FROM chunks c \
+    \FROM (SELECT content_sha256, content FROM chunks \
+    \      UNION ALL \
+    \      SELECT content_sha256, content FROM doc_chunks) c \
     \LEFT JOIN embeddings e \
     \  ON e.content_sha256 = c.content_sha256 AND e.model = ? \
     \WHERE e.content_sha256 IS NULL \
@@ -278,22 +333,58 @@ embedPending conn model embed = do
         insertEmbeddings conn model (zip (map fst pending) vecs)
 
 -- | Nodes ranked by cosine similarity of their best chunk to the query
--- vector (score = 1 - cosine distance, higher is better).
+-- vector (score = 1 - cosine distance, higher is better). Document-extract
+-- chunks count toward their literature note.
 semanticSearch
   :: Connection -> Text -> [Float] -> Int -> IO [(Text, Text, FilePath, Double)]
 semanticSearch conn model vec limit =
   query
     conn
-    "SELECT n.id, n.title, n.file, \
-    \       1 - min(e.embedding <=> ?::vector) AS score \
-    \FROM embeddings e \
-    \JOIN chunks c ON c.content_sha256 = e.content_sha256 \
-    \JOIN nodes n ON n.id = c.node_id \
-    \WHERE e.model = ? \
+    "SELECT n.id, n.title, n.file, 1 - min(h.dist) AS score \
+    \FROM (SELECT c.node_id AS id, e.embedding <=> ?::vector AS dist \
+    \      FROM embeddings e \
+    \      JOIN chunks c ON c.content_sha256 = e.content_sha256 \
+    \      WHERE e.model = ? \
+    \      UNION ALL \
+    \      SELECT dc.note_id, e.embedding <=> ?::vector \
+    \      FROM embeddings e \
+    \      JOIN doc_chunks dc ON dc.content_sha256 = e.content_sha256 \
+    \      WHERE e.model = ?) h \
+    \JOIN nodes n ON n.id = h.id \
     \GROUP BY n.id, n.title, n.file \
     \ORDER BY score DESC \
     \LIMIT ?"
-    (renderVector vec, model, limit)
+    (renderVector vec, model, renderVector vec, model, limit)
+
+-- | Link-suggestion candidates: notes ranked by the best chunk-to-chunk
+-- cosine similarity against the given note's chunks (document embeddings on
+-- both sides), each with a flag saying whether a link already exists in
+-- either direction. Document-extract chunks count toward their literature
+-- note on both sides of the comparison.
+similarNotes
+  :: Connection -> Text -> Text -> Int -> IO [(Text, Text, FilePath, Double, Bool)]
+similarNotes conn model nid limit =
+  query
+    conn
+    "SELECT n.id, n.title, n.file, \
+    \       1 - min(e2.embedding <=> e1.embedding) AS score, \
+    \       EXISTS (SELECT 1 FROM links l \
+    \               WHERE (l.src = ? AND l.dst = n.id) \
+    \                  OR (l.src = n.id AND l.dst = ?)) AS linked \
+    \FROM (SELECT node_id AS id, content_sha256 FROM chunks \
+    \      UNION ALL \
+    \      SELECT note_id, content_sha256 FROM doc_chunks) c1 \
+    \JOIN embeddings e1 ON e1.content_sha256 = c1.content_sha256 AND e1.model = ? \
+    \JOIN (SELECT node_id AS id, content_sha256 FROM chunks \
+    \      UNION ALL \
+    \      SELECT note_id, content_sha256 FROM doc_chunks) c2 ON c2.id <> ? \
+    \JOIN embeddings e2 ON e2.content_sha256 = c2.content_sha256 AND e2.model = ? \
+    \JOIN nodes n ON n.id = c2.id \
+    \WHERE c1.id = ? \
+    \GROUP BY n.id, n.title, n.file \
+    \ORDER BY score DESC \
+    \LIMIT ?"
+    (nid, nid, model, nid, model, nid, limit)
 
 -- Extraction ----------------------------------------------------------------
 
@@ -362,6 +453,35 @@ nodeLinks doc = preambleLinks <> concatMap (go (documentId doc)) (docHeadlines d
             Just o -> [(o, l) | l <- extractLinks (hlBody hl)]
             Nothing -> []
        in own <> concatMap (go owner') (hlChildren hl)
+
+-- | Name of the extracted-text sidecar inside an attach dir. A dotfile so
+-- org-attach file listings stay clean; `archive-document` writes it and the
+-- indexer sweeps for it.
+extractFileName :: FilePath
+extractFileName = ".extract.txt"
+
+-- | Extracted-text sidecars in the org-attach tree
+-- (@data/\<2 chars>/\<rest>/.extract.txt@), each paired with the note ID the
+-- attach path encodes.
+listExtractFiles :: FilePath -> IO [(FilePath, Text)]
+listExtractFiles notesDir = do
+  let dataDir = notesDir </> "data"
+  hasData <- doesDirectoryExist dataDir
+  if not hasData
+    then pure []
+    else do
+      prefixes <- listDirectory dataDir
+      fmap concat . forM prefixes $ \pre -> do
+        let preDir = dataDir </> pre
+        isDir <- doesDirectoryExist preDir
+        if not isDir
+          then pure []
+          else do
+            rests <- listDirectory preDir
+            fmap concat . forM rests $ \rest -> do
+              let p = preDir </> rest </> extractFileName
+              ok <- doesFileExist p
+              pure [(p, T.pack (pre <> rest)) | ok]
 
 listOrgFiles :: FilePath -> IO [FilePath]
 listOrgFiles dir = do

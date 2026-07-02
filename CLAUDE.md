@@ -88,9 +88,9 @@ Postgres (tsvector FTS + pgvector) → MCP tools over stdio.
   to stderr (printing to stdout corrupts the MCP stream). Notifications
   (requests without `id`) must never be answered.
 - `src/Dross/Tools.hs` — tool schemas + implementations (`search`,
-  `semantic-search`, `read-note`, `backlinks`, `forward-links`,
-  `neighborhood`, `create-note`, `update-note`, `append-note`, `capture`,
-  `archive-document`).
+  `semantic-search`, `similar-notes`, `read-note`, `backlinks`,
+  `forward-links`, `neighborhood`, `create-note`, `update-note`,
+  `append-note`, `capture`, `archive-document`).
   Tool results are JSON encoded into a single MCP text content block; tool
   failures return `isError: true` rather than JSON-RPC errors. Mutations
   follow the decided write policy: atomic temp-file+rename writes and hash
@@ -105,15 +105,26 @@ Postgres (tsvector FTS + pgvector) → MCP tools over stdio.
   `Embed` is the Voyage HTTP client (`VOYAGE_API_KEY`; `DROSS_EMBED_MODEL`
   overrides `voyage-3.5`, `DROSS_EMBED_URL` the endpoint — useful for a
   local mock when smoke-testing). Vectors are fetched lazily inside
-  `semantic-search` only (`embedPending`) — no other tool touches the
-  network, and a missing key just disables that one tool. Embeddings are
-  keyed by `(content_sha256, model)`, not chunk id, so they survive
-  re-indexing; only changed content is re-embedded.
+  `semantic-search` and `similar-notes` only (`embedPending`) — no other
+  tool touches the network, and a missing key just disables those two
+  tools. Embeddings are keyed by `(content_sha256, model)`, not chunk id,
+  so they survive re-indexing; only changed content is re-embedded.
+  Archived-document extracted text (`archive-document`'s `text` parameter)
+  lives in a `.extract.txt` sidecar in the attach dir and is swept —
+  hash-driven, like org files — into `doc_chunks` rows attributed to the
+  literature note; deliberately *not* FK'd to `nodes` so they survive the
+  note file's delete-and-reinsert re-index. `search`, `semantic-search`,
+  and `similar-notes` all union them in.
 - `dross-bot/` — Go Telegram capture bot (`main.go` telegram wiring,
   `mcp.go` minimal MCP stdio client). It is an MCP *client*: it spawns
   `dross-mcp` and routes text/forwards to `capture` and photos/files to
   `archive-document`, so the write policy stays server-side. Single shared
   subprocess guarded by a mutex; restarted once on transport failure.
+- `docs/notes-CLAUDE.md` — template CLAUDE.md for the *notes* repository:
+  Zettelkasten discipline plus the agent-side workflows (inbox processing,
+  link suggestion via `similar-notes`, Q&A with citations, literature-note
+  drafting). Server tools change → check whether this template needs the
+  same update.
 - `db/schema.sql` — canonical schema, applied via `make db-migrate`; every
   statement must stay idempotent (`IF NOT EXISTS` / `ON CONFLICT`). The
   `embeddings` table is `vector(1024)` for voyage-3.5, keyed by content

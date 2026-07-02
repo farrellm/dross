@@ -34,7 +34,7 @@ main = do
   urlOverride <- lookupEnv "DROSS_EMBED_URL"
   embed <- case apiKey of
     Nothing -> do
-      hPutStrLn stderr "dross-mcp: VOYAGE_API_KEY unset — semantic-search disabled"
+      hPutStrLn stderr "dross-mcp: VOYAGE_API_KEY unset — semantic-search and similar-notes disabled"
       pure Nothing
     Just key -> do
       cfg <- newEmbedConfig (T.pack key) (T.pack <$> modelOverride) urlOverride

@@ -2,7 +2,7 @@
 
 Haskell MCP server for the Dross note archive (see `../CONCEPT.md`).
 
-## Status: MVP
+## Status: Augment (roadmap stage 3)
 
 Working:
 
@@ -16,18 +16,27 @@ Working:
   source of truth.
 - **Tools**: `search` (Postgres FTS + title substring fallback),
   `semantic-search` (Voyage embeddings + pgvector cosine distance),
-  `read-note`, `backlinks`, `forward-links`, `neighborhood`, `create-note`,
-  `update-note`, `append-note`, `capture`, `archive-document`. Mutations
-  follow the check-then-refuse write policy (hash from `read-note`).
+  `similar-notes` (embedding-similar notes to a given note, with a `linked`
+  flag — link-suggestion candidates), `read-note`, `backlinks`,
+  `forward-links`, `neighborhood`, `create-note`, `update-note`,
+  `append-note`, `capture`, `archive-document`. Mutations follow the
+  check-then-refuse write policy (hash from `read-note`).
 - **Embeddings** (`Dross.Chunk` + `Dross.Embed`): notes are chunked at
   headline level during indexing; vectors are fetched from Voyage
-  (`voyage-3.5`) lazily inside `semantic-search`, keyed by chunk content
-  hash so unchanged notes are never re-embedded. Requires `VOYAGE_API_KEY`
-  (unset = semantic-search disabled, everything else works);
-  `DROSS_EMBED_MODEL` overrides the model.
+  (`voyage-3.5`) lazily inside `semantic-search` / `similar-notes`, keyed
+  by chunk content hash so unchanged notes are never re-embedded. Requires
+  `VOYAGE_API_KEY` (unset = those two tools disabled, everything else
+  works); `DROSS_EMBED_MODEL` overrides the model.
+- **Archived-document text**: `archive-document` accepts extracted plain
+  text (`text` parameter; extraction is the caller's job) and stores it as
+  a `.extract.txt` sidecar in the attach dir. Sidecars are indexed like org
+  files (hash-driven) into `doc_chunks` attributed to the literature note,
+  so `search`, `semantic-search`, and `similar-notes` cover the archive.
+- **Workflows**: `../docs/notes-CLAUDE.md` is the CLAUDE.md template for
+  the notes repo — link suggestion, Q&A with citations, literature-note
+  drafting.
 
-Not yet wired: extracted-text embedding for archived documents,
-git auto-commit.
+Not yet wired: git auto-commit.
 
 ## Database (Docker)
 

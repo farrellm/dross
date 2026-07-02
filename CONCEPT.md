@@ -36,6 +36,7 @@ Lives in the `dross-mcp/` directory.
 - MCP server exposing the archive as tools:
   - `search` — full-text + tag + date-range queries
   - `semantic-search` — embedding similarity over notes and extracted document text
+  - `similar-notes` — embedding-similar notes to a given note (link-suggestion candidates)
   - `read-note` / `create-note` / `append-note` / `update-note`
   - `backlinks` / `forward-links` / `neighborhood` (n-hop link graph around a note)
   - `capture` — append to inbox with timestamp and source metadata
@@ -170,14 +171,31 @@ Roughly ordered by value:
   hash-keyed embeddings survive that, so only genuinely new content hits
   the API. Orphaned vectors from edited-away content are tolerated
   (harmless at personal scale; prunable with one SQL statement).
-- Embedding runs **only inside `semantic-search`** (catch-up before the
-  query): every other tool — including capture — never touches the
-  network, and a Voyage outage degrades search to existing embeddings
-  instead of slowing anything else down. Configured via `VOYAGE_API_KEY`
-  (unset = semantic-search disabled, everything else unaffected) and
-  optional `DROSS_EMBED_MODEL`.
-- Embedding scope, phase one: **org notes only** — archived-document
-  extracted text still needs its own ingestion path (see Document archive).
+- Embedding runs **only inside the embedding-backed tools**
+  (`semantic-search` and `similar-notes`, as a catch-up before the query):
+  every other tool — including capture — never touches the network, and a
+  Voyage outage degrades search to existing embeddings instead of slowing
+  anything else down. Configured via `VOYAGE_API_KEY` (unset = those two
+  tools disabled, everything else unaffected) and optional
+  `DROSS_EMBED_MODEL`.
+- Embedding scope: org notes **and archived-document extracted text**
+  (phase one was notes-only; the extract ingestion path landed with the
+  Augment stage — see the extracted-text decision below).
+- Link suggestion split: the server provides **embedding candidates** via
+  `similar-notes` (each with a `linked` flag for links already present in
+  either direction); filtering candidates by judgment and proposing actual
+  edits stays with the agent. Suggested links are ordinary note edits and
+  go through the normal write policy.
+- Extracted document text: `archive-document` takes an optional **`text`**
+  parameter (extraction itself — pdftotext, OCR, readability — remains the
+  client agent's job) and stores it as a **`.extract.txt` sidecar in the
+  attach dir**, so disk stays the source of truth and the index stays a
+  rebuildable cache. The indexer sweeps sidecars like org files
+  (hash-driven) into `doc_chunks` rows attributed to the literature note
+  whose ID the attach path encodes; `search`, `semantic-search`, and
+  `similar-notes` all cover them, attributing hits to the literature note.
+  A dotfile name keeps org-attach listings clean; a sidecar can also be
+  dropped into an attach dir by hand and is picked up on the next sweep.
 - Proposal staging: **git branch per proposal** (`proposal/<id>`). Approve =
   merge to main (fast-forward when possible); reject = delete branch. Diffs,
   conflict detection, and audit come free from git; the Telegram approval
@@ -204,5 +222,6 @@ Roughly ordered by value:
   to the copy with a relative `file:` link, carries `:SOURCE:` in its
   drawer, and is tagged `:literature:ATTACH:`. `archive-document` takes a
   **local file path** — URL fetching and text extraction are the client
-  agent's job; extracted-text indexing arrives with the embeddings phase.
+  agent's job; extracted text is passed via the `text` parameter and
+  indexed (see the extracted-text decision above).
 

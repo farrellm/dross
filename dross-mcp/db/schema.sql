@@ -54,6 +54,28 @@ CREATE TABLE IF NOT EXISTS chunks (
 );
 CREATE INDEX IF NOT EXISTS chunks_sha_idx ON chunks (content_sha256);
 
+-- Extracted text of archived documents: chunks of the .extract.txt sidecar
+-- in each attach dir, attributed to the literature note whose ID the attach
+-- path encodes. Keyed by the sidecar's files row (hash-driven re-indexing,
+-- same as org files); note_id is deliberately not a foreign key — nodes are
+-- deleted and re-inserted when their file re-indexes, and doc chunks must
+-- survive that.
+CREATE TABLE IF NOT EXISTS doc_chunks (
+    id             bigserial PRIMARY KEY,
+    path           text NOT NULL REFERENCES files (path) ON DELETE CASCADE,
+    note_id        text NOT NULL,
+    seq            int NOT NULL,
+    content        text NOT NULL,
+    content_sha256 bytea NOT NULL,
+    fts            tsvector GENERATED ALWAYS AS (
+                       to_tsvector('english', content)
+                   ) STORED,
+    UNIQUE (path, seq)
+);
+CREATE INDEX IF NOT EXISTS doc_chunks_fts_idx ON doc_chunks USING gin (fts);
+CREATE INDEX IF NOT EXISTS doc_chunks_note_idx ON doc_chunks (note_id);
+CREATE INDEX IF NOT EXISTS doc_chunks_sha_idx ON doc_chunks (content_sha256);
+
 -- Embeddings are keyed by chunk content hash + model, NOT chunk id, so they
 -- survive re-indexing (indexFile deletes and re-inserts nodes and chunks).
 -- Orphans left by edits are harmless at personal scale; prune manually with

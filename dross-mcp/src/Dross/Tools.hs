@@ -9,6 +9,7 @@ module Dross.Tools
   , renderNote
   ) where
 
+import Control.Monad (when)
 import Crypto.Hash.SHA256 qualified as SHA256
 import Data.Aeson
 import Data.Aeson.Types (Parser, parseEither)
@@ -67,7 +68,7 @@ toolDefs =
       )
   , tool
       "semantic-search"
-      "Embedding-similarity search over notes (Voyage + pgvector). Returns matching note IDs, titles, files, and a 0-1 similarity score. Requires VOYAGE_API_KEY."
+      "Embedding-similarity search over notes and archived-document text (Voyage + pgvector). Returns matching note IDs, titles, files, and a 0-1 similarity score. Requires VOYAGE_API_KEY."
       ( object
           [ "type" .= t "object"
           , "properties"
@@ -150,6 +151,27 @@ toolDefs =
                     .= object
                       [ "type" .= t "integer"
                       , "description" .= t "Maximum hops from the root, 1-10 (default 2)"
+                      ]
+                ]
+          , "required" .= [t "id"]
+          ]
+      )
+  , tool
+      "similar-notes"
+      "Notes most similar to a given note by embedding distance -- candidates for linking. Returns note IDs, titles, files, a 0-1 similarity score, and whether a link between the notes already exists in either direction. Requires VOYAGE_API_KEY."
+      ( object
+          [ "type" .= t "object"
+          , "properties"
+              .= object
+                [ "id"
+                    .= object
+                      [ "type" .= t "string"
+                      , "description" .= t "The note's org :ID: property"
+                      ]
+                , "limit"
+                    .= object
+                      [ "type" .= t "integer"
+                      , "description" .= t "Maximum number of results (default 10)"
                       ]
                 ]
           , "required" .= [t "id"]
@@ -302,6 +324,11 @@ toolDefs =
                       , "items" .= object ["type" .= t "string"]
                       , "description" .= t "Extra filetags beyond literature/ATTACH (optional)"
                       ]
+                , "text"
+                    .= object
+                      [ "type" .= t "string"
+                      , "description" .= t "Extracted plain text of the document (optional). Stored beside the attachment and indexed, so search and semantic-search cover the document's content; extraction (pdftotext, OCR, ...) is the caller's job."
+                      ]
                 ]
           , "required" .= [t "path", t "title"]
           ]
@@ -343,6 +370,28 @@ callTool env name args = do
                 | (i, title, file, score) <- hits
                 ]
             Right _ -> pure (Left "embedding API returned an unexpected number of vectors")
+    "similar-notes" -> withParsed (\o -> (,) <$> o .: "id" <*> o .:? "limit" .!= (10 :: Int)) $
+      \(nid, limit) -> case envEmbed env of
+        Nothing ->
+          pure (Left "similar-notes is disabled: set VOYAGE_API_KEY and restart the server")
+        Just cfg ->
+          getNode (envDb env) nid >>= \case
+            Nothing -> pure (Left ("no note with ID " <> nid))
+            Just _ -> do
+              -- Same catch-up as semantic-search, so the note being matched
+              -- (often just created or edited) has vectors to compare.
+              embedPending (envDb env) (embedModel cfg) (embedTexts cfg Document)
+              rows <- similarNotes (envDb env) (embedModel cfg) nid limit
+              pure . Right . toJSON $
+                [ object
+                    [ "id" .= i
+                    , "title" .= title
+                    , "file" .= file
+                    , "score" .= score
+                    , "linked" .= linked
+                    ]
+                | (i, title, file, score, linked) <- rows
+                ]
     "read-note" -> withParsed (.: "id") $ \nid ->
       getNode (envDb env) nid >>= \case
         Nothing -> pure (Left ("no note with ID " <> nid))
@@ -440,7 +489,7 @@ callTool env name args = do
     -- Like create-note, this writes a brand-new note file (no existing
     -- note to conflict with), so there is no hash parameter; the copied
     -- document lands in the org-attach uuid layout Emacs expects.
-    "archive-document" -> withParsed parseArchive $ \(path, title, msource, content, tags) ->
+    "archive-document" -> withParsed parseArchive $ \(path, title, msource, content, tags, extractText) ->
       case validateArchive title msource tags of
         Left err -> pure (Left err)
         Right () -> do
@@ -453,8 +502,14 @@ callTool env name args = do
                     "data" </> T.unpack (T.take 2 nid) </> T.unpack (T.drop 2 nid)
                   attachDir = envNotesDir env </> attachRel
                   target = attachDir </> takeFileName path
+                  hasExtract = not (T.null (T.strip extractText))
               createDirectoryIfMissing True attachDir
               copyFile path target
+              -- The sidecar keeps extracted text on disk (source of truth);
+              -- the note must be written before refreshIndex sees the
+              -- sidecar, and it is, just below.
+              when hasExtract $
+                atomicWrite (attachDir </> extractFileName) (TE.encodeUtf8 extractText)
               notePath <- freshPath (envNotesDir env) (slugify title) nid
               let link :: Text
                   link =
@@ -475,6 +530,8 @@ callTool env name args = do
                   [ "id" .= nid
                   , "file" .= notePath
                   , "attached" .= target
+                  , "extract"
+                      .= (if hasExtract then Just (attachDir </> extractFileName) else Nothing)
                   , "hash" .= sha256Hex bytes
                   ]
     _ -> pure (Left ("unknown tool: " <> name))
@@ -499,12 +556,13 @@ callTool env name args = do
         <*> o .:? "title"
         <*> o .:? "source"
     parseArchive o =
-      (,,,,)
+      (,,,,,)
         <$> o .: "path"
         <*> o .: "title"
         <*> o .:? "source"
         <*> o .:? "content" .!= ""
         <*> o .:? "tags" .!= []
+        <*> o .:? "text" .!= ""
     parseUpdate o =
       (,,,,)
         <$> o .: "id"
