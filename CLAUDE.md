@@ -74,7 +74,8 @@ Postgres (tsvector FTS + pgvector) → MCP tools over stdio.
   to stderr (printing to stdout corrupts the MCP stream). Notifications
   (requests without `id`) must never be answered.
 - `src/Dross/Tools.hs` — tool schemas + implementations (`search`,
-  `read-note`, `backlinks`, `create-note`, `update-note`, `append-note`).
+  `read-note`, `backlinks`, `forward-links`, `create-note`, `update-note`,
+  `append-note`).
   Tool results are JSON encoded into a single MCP text content block; tool
   failures return `isError: true` rather than JSON-RPC errors. Mutations
   follow the decided write policy: atomic temp-file+rename writes and hash

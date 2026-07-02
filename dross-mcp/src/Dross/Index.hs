@@ -13,6 +13,7 @@ module Dross.Index
   , searchNodes
   , getNode
   , backlinks
+  , forwardLinks
   , NodeRow (..)
   ) where
 
@@ -162,6 +163,17 @@ backlinks conn nid =
     "SELECT n.id, n.title, n.file, l.descr \
     \FROM links l JOIN nodes n ON n.id = l.src \
     \WHERE l.dst = ? ORDER BY n.title"
+    (Only nid)
+
+-- | Notes the given ID links to. Dangling targets (an @[[id:...]]@ link to
+-- a note not in the index) come back with NULL title and file.
+forwardLinks :: Connection -> Text -> IO [(Text, Maybe Text, Maybe FilePath, Maybe Text)]
+forwardLinks conn nid =
+  query
+    conn
+    "SELECT l.dst, n.title, n.file, l.descr \
+    \FROM links l LEFT JOIN nodes n ON n.id = l.dst \
+    \WHERE l.src = ? ORDER BY n.title"
     (Only nid)
 
 -- Extraction ----------------------------------------------------------------

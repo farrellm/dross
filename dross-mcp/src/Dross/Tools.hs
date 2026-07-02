@@ -91,6 +91,22 @@ toolDefs =
           ]
       )
   , tool
+      "forward-links"
+      "List notes the given note links to. Dangling links (target not in the index) have null title and file."
+      ( object
+          [ "type" .= t "object"
+          , "properties"
+              .= object
+                [ "id"
+                    .= object
+                      [ "type" .= t "string"
+                      , "description" .= t "The source note's org :ID: property"
+                      ]
+                ]
+          , "required" .= [t "id"]
+          ]
+      )
+  , tool
       "create-note"
       "Create a new note file with a generated org ID. Returns the new note's ID, file path, and content hash (usable with update-note / append-note)."
       ( object
@@ -214,6 +230,12 @@ callTool env name args = do
               ]
     "backlinks" -> withParsed (.: "id") $ \nid -> do
       rows <- backlinks (envDb env) nid
+      pure . Right . toJSON $
+        [ object ["id" .= i, "title" .= title, "file" .= file, "description" .= descr]
+        | (i, title, file, descr) <- rows
+        ]
+    "forward-links" -> withParsed (.: "id") $ \nid -> do
+      rows <- forwardLinks (envDb env) nid
       pure . Right . toJSON $
         [ object ["id" .= i, "title" .= title, "file" .= file, "description" .= descr]
         | (i, title, file, descr) <- rows
