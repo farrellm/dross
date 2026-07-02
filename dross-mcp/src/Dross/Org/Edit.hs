@@ -7,7 +7,8 @@
 -- preserved, and everything below it is the note's body.
 module Dross.Org.Edit
   ( splitMetadata
-  , replaceBody
+  , setKeyword
+  , renderFile
   , appendBody
   ) where
 
@@ -38,14 +39,31 @@ splitMetadata content =
       _ -> ([], ls)
     isMarker m l = T.toUpper (T.strip l) == m
 
--- | Replace everything after the metadata block with a new body.
-replaceBody :: Text -> Text -> Text
-replaceBody original newBody =
-  let (meta, _) = splitMetadata original
-      body = if T.null (T.stripEnd newBody) then "" else T.stripEnd newBody <> "\n"
+-- | Set or replace a @#+key:@ line among metadata lines, in place (first
+-- match wins; later duplicates are left alone — the parser ignores them);
+-- 'Nothing' removes every match. A missing keyword is appended after the
+-- existing metadata. The key must be lowercase, matching 'parseKeyword'.
+setKeyword :: Text -> Maybe Text -> [Text] -> [Text]
+setKeyword key mval meta = case mval of
+  Nothing -> filter (not . matches) meta
+  Just val ->
+    let line = "#+" <> key <> ": " <> val
+     in case break matches meta of
+          (before, _old : after) -> before <> (line : after)
+          (_, []) -> meta <> [line]
+  where
+    matches l = (fst <$> parseKeyword l) == Just key
+
+-- | Reassemble a file from metadata lines and body text: metadata, one
+-- blank separator line, body, trailing newline. Inverse of 'splitMetadata'
+-- up to blank-line normalization at the seam.
+renderFile :: [Text] -> Text -> Text
+renderFile meta body =
+  let b = T.stripEnd (T.dropWhile (== '\n') (normalize body))
+      bodyPart = if T.null b then "" else b <> "\n"
    in if null meta
-        then body
-        else T.unlines meta <> (if T.null body then "" else "\n" <> body)
+        then bodyPart
+        else T.unlines meta <> (if T.null bodyPart then "" else "\n" <> bodyPart)
 
 -- | Append a paragraph at the end of the file, separated by a blank line.
 appendBody :: Text -> Text -> Text

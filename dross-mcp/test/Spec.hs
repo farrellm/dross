@@ -105,10 +105,11 @@ main = do
     ([":PROPERTIES:", ":ID: src-note", ":END:", "#+title: Src"], Just "#+begin_src haskell")
     (let (m, b) = splitMetadata srcSample in (m, listToMaybe b))
 
-  -- replaceBody keeps metadata verbatim and swaps the body.
-  let updated = replaceBody sample "New body text."
+  -- renderFile keeps metadata verbatim and swaps the body.
+  let sampleMeta = fst (splitMetadata sample)
+      updated = renderFile sampleMeta "New body text."
   check
-    "replaceBody"
+    "renderFile"
     ( T.unlines
         [ ":PROPERTIES:"
         , ":ID: file-id-123"
@@ -121,13 +122,36 @@ main = do
     )
     updated
   check
-    "replaceBody reparses with same id"
+    "renderFile reparses with same id"
     (Right (Just "file-id-123"))
     (documentId <$> parseDocument "sample.org" updated)
   check
-    "replaceBody empty body keeps metadata only"
+    "renderFile empty body keeps metadata only"
     5
-    (length (T.lines (replaceBody sample "")))
+    (length (T.lines (renderFile sampleMeta "")))
+  check
+    "renderFile inverts splitMetadata"
+    sample
+    (let (m, b) = splitMetadata sample in renderFile m (T.intercalate "\n" b))
+
+  -- setKeyword: replace in place, remove, and append-if-missing.
+  check
+    "setKeyword replaces title in place"
+    [ ":PROPERTIES:"
+    , ":ID: file-id-123"
+    , ":END:"
+    , "#+title: Renamed"
+    , "#+filetags: :dross:test:"
+    ]
+    (setKeyword "title" (Just "Renamed") sampleMeta)
+  check
+    "setKeyword removes filetags"
+    [":PROPERTIES:", ":ID: file-id-123", ":END:", "#+title: Sample Note"]
+    (setKeyword "filetags" Nothing sampleMeta)
+  check
+    "setKeyword appends missing keyword"
+    (sampleMeta <> ["#+author: me"])
+    (setKeyword "author" (Just "me") sampleMeta)
 
   -- appendBody separates with exactly one blank line and ends with newline.
   check

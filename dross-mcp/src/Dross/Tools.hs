@@ -14,7 +14,8 @@ import Data.Bifunctor (first)
 import Data.Bits (shiftR, (.&.))
 import Data.ByteString (ByteString)
 import Data.ByteString qualified as BS
-import Data.Char (intToDigit, isAlphaNum)
+import Data.Char (intToDigit, isAlphaNum, isSpace)
+import Data.Maybe (fromMaybe, isNothing)
 import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Text.Encoding qualified as TE
@@ -116,7 +117,7 @@ toolDefs =
       )
   , tool
       "update-note"
-      "Replace a note's body, keeping its ID and metadata (property drawer and #+keyword lines). Only file-level notes. Refuses if the file changed since it was read: pass the hash from read-note, and on a conflict re-read and retry."
+      "Update a note: replace its body and/or set its title and filetags, keeping its ID and other metadata (property drawer and #+keyword lines). Only file-level notes. Refuses if the file changed since it was read: pass the hash from read-note, and on a conflict re-read and retry."
       ( object
           [ "type" .= t "object"
           , "properties"
@@ -129,7 +130,18 @@ toolDefs =
                 , "content"
                     .= object
                       [ "type" .= t "string"
-                      , "description" .= t "New body (raw org text); replaces everything below the file's metadata block"
+                      , "description" .= t "New body (raw org text); replaces everything below the file's metadata block. Omit to keep the current body."
+                      ]
+                , "title"
+                    .= object
+                      [ "type" .= t "string"
+                      , "description" .= t "New #+title (optional)"
+                      ]
+                , "tags"
+                    .= object
+                      [ "type" .= t "array"
+                      , "items" .= object ["type" .= t "string"]
+                      , "description" .= t "New #+filetags, replacing the current set; an empty array removes them (optional)"
                       ]
                 , "hash"
                     .= object
@@ -137,7 +149,7 @@ toolDefs =
                       , "description" .= t "File content hash from read-note"
                       ]
                 ]
-          , "required" .= [t "id", t "content", t "hash"]
+          , "required" .= [t "id", t "hash"]
           ]
       )
   , tool
@@ -213,23 +225,17 @@ callTool env name args = do
       atomicWrite path bytes
       refreshIndex (envDb env) (envNotesDir env)
       pure . Right $ object ["id" .= nid, "file" .= path, "hash" .= sha256Hex bytes]
-    "update-note" -> withParsed parseEdit $ \(nid, content, expected) ->
-      mutateNote env nid expected $ \path old ->
-        let new = replaceBody old content
-         in case parseDocument path new of
-              Left err ->
-                Left ("rejected: the updated file would not parse:\n" <> T.pack err)
-              Right newDoc ->
-                let oldIds = either (const []) documentNodeIds (parseDocument path old)
-                    lost = filter (`notElem` documentNodeIds newDoc) oldIds
-                 in if null lost
-                      then Right new
-                      else
-                        Left
-                          ( "rejected: the update would delete note IDs still in the file: "
-                              <> T.intercalate ", " lost
-                              <> ". Keep their headlines (with :PROPERTIES: drawers) in the new content, or edit the file in Emacs."
-                          )
+    "update-note" -> withParsed parseUpdate $ \(nid, expected, mcontent, mtitle, mtags) ->
+      case validateUpdate mcontent mtitle mtags of
+        Left err -> pure (Left err)
+        Right () -> mutateNote env nid expected $ \path old ->
+          let (meta, bodyLines) = splitMetadata old
+              meta' =
+                maybe id (\ti -> setKeyword "title" (Just ti)) mtitle
+                  . maybe id (setKeyword "filetags" . renderTags) mtags
+                  $ meta
+              body = fromMaybe (T.intercalate "\n" bodyLines) mcontent
+           in checkedRewrite path old (renderFile meta' body)
     "append-note" -> withParsed parseEdit $ \(nid, content, expected) ->
       mutateNote env nid expected $ \_path old ->
         if T.null (T.strip content)
@@ -251,6 +257,48 @@ callTool env name args = do
         <$> o .: "id"
         <*> o .: "content"
         <*> o .: "hash"
+    parseUpdate o =
+      (,,,,)
+        <$> o .: "id"
+        <*> o .: "hash"
+        <*> o .:? "content"
+        <*> o .:? "title"
+        <*> o .:? "tags"
+
+-- | Refuse malformed update arguments before touching the file.
+validateUpdate :: Maybe Text -> Maybe Text -> Maybe [Text] -> Either Text ()
+validateUpdate mcontent mtitle mtags
+  | isNothing mcontent && isNothing mtitle && isNothing mtags =
+      Left "nothing to update: provide content, title, and/or tags"
+  | Just ti <- mtitle, T.null (T.strip ti) || T.any (== '\n') ti =
+      Left "invalid title: must be a single non-empty line"
+  | Just tg <- mtags, any badTag tg =
+      Left "invalid tags: each tag must be non-empty, with no whitespace or ':'"
+  | otherwise = Right ()
+  where
+    badTag tg = T.null tg || T.any (\c -> c == ':' || isSpace c) tg
+
+renderTags :: [Text] -> Maybe Text
+renderTags [] = Nothing
+renderTags tags = Just (":" <> T.intercalate ":" tags <> ":")
+
+-- | Accept a rewrite only if the result still parses and keeps every node
+-- ID the file had before — refusals name the IDs so the agent can retry.
+checkedRewrite :: FilePath -> Text -> Text -> Either Text Text
+checkedRewrite path old new = case parseDocument path new of
+  Left err ->
+    Left ("rejected: the updated file would not parse:\n" <> T.pack err)
+  Right newDoc ->
+    let oldIds = either (const []) documentNodeIds (parseDocument path old)
+        lost = filter (`notElem` documentNodeIds newDoc) oldIds
+     in if null lost
+          then Right new
+          else
+            Left
+              ( "rejected: the update would delete note IDs still in the file: "
+                  <> T.intercalate ", " lost
+                  <> ". Keep their headlines (with :PROPERTIES: drawers) in the new content, or edit the file in Emacs."
+              )
 
 -- | Shared harness for the mutating tools: resolve the note, apply the
 -- check-then-refuse policy (file-level notes only; the file's current hash
