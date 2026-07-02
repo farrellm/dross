@@ -169,4 +169,10 @@ Roughly ordered by value:
   merge to main (fast-forward when possible); reject = delete branch. Diffs,
   conflict detection, and audit come free from git; the Telegram approval
   message shows the branch's diff summary.
+- Inbox: a **single `inbox.org`** in the notes root (`#+filetags: :inbox:`,
+  bootstrapped on first capture); each capture is a top-level headline with
+  its own `:ID:`, a `:CREATED:` timestamp, and optional `:SOURCE:`.
+- `capture` is append-only and **exempt from the hash check** — it inserts
+  fresh content without a prior read, so there is nothing to go stale. All
+  other mutations keep check-then-refuse.
 

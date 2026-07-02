@@ -11,6 +11,7 @@ import System.Exit
 import Dross.Org.Edit
 import Dross.Org.Parser
 import Dross.Org.Types
+import Dross.Tools (renderCapture)
 
 main :: IO ()
 main = do
@@ -158,6 +159,30 @@ main = do
     "appendBody"
     (T.stripEnd sample <> "\n\nAppended paragraph.\n")
     (appendBody sample "Appended paragraph.\n")
+
+  -- A rendered capture parses back into one headline with its metadata.
+  let cap =
+        renderCapture
+          "cap-id-1"
+          "[2026-07-01 Tue 14:32]"
+          (Just "Quick thought")
+          (Just "telegram")
+          "Raw capture body."
+  case parseDocument "inbox.org" cap of
+    Left err -> putStrLn err >> exitFailure
+    Right capDoc -> case docHeadlines capDoc of
+      [hl] -> do
+        check "capture title" "[2026-07-01 Tue 14:32] Quick thought" (hlTitle hl)
+        check "capture id" (Just "cap-id-1") (Map.lookup "ID" (hlProperties hl))
+        check
+          "capture created"
+          (Just "[2026-07-01 Tue 14:32]")
+          (Map.lookup "CREATED" (hlProperties hl))
+        check "capture source" (Just "telegram") (Map.lookup "SOURCE" (hlProperties hl))
+        check "capture body" "Raw capture body." (T.strip (hlBody hl))
+      hs -> do
+        putStrLn ("expected 1 capture headline, got " <> show (length hs))
+        exitFailure
 
   n <- readIORef failures
   if n == 0

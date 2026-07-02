@@ -5,6 +5,7 @@ module Dross.Tools
   ( Env (..)
   , toolDefs
   , callTool
+  , renderCapture
   ) where
 
 import Crypto.Hash.SHA256 qualified as SHA256
@@ -19,6 +20,7 @@ import Data.Maybe (fromMaybe, isNothing)
 import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Text.Encoding qualified as TE
+import Data.Time (defaultTimeLocale, formatTime, getZonedTime)
 import Data.UUID qualified as UUID
 import Data.UUID.V4 qualified as V4
 import Database.PostgreSQL.Simple (Connection)
@@ -215,6 +217,32 @@ toolDefs =
           , "required" .= [t "id", t "content", t "hash"]
           ]
       )
+  , tool
+      "capture"
+      "Append a raw capture to the inbox (inbox.org, created on first use). Each capture becomes a timestamped headline with its own org ID. No hash needed: capture is append-only."
+      ( object
+          [ "type" .= t "object"
+          , "properties"
+              .= object
+                [ "content"
+                    .= object
+                      [ "type" .= t "string"
+                      , "description" .= t "The captured text (raw org)"
+                      ]
+                , "title"
+                    .= object
+                      [ "type" .= t "string"
+                      , "description" .= t "Short headline for the capture (optional; the timestamp alone otherwise)"
+                      ]
+                , "source"
+                    .= object
+                      [ "type" .= t "string"
+                      , "description" .= t "Where this came from, e.g. telegram or a URL (optional)"
+                      ]
+                ]
+          , "required" .= [t "content"]
+          ]
+      )
   ]
   where
     t :: Text -> Text
@@ -304,6 +332,30 @@ callTool env name args = do
         if T.null (T.strip content)
           then Left "nothing to append: content is empty"
           else Right (appendBody old content)
+    -- Deliberately not routed through mutateNote: capture is append-only
+    -- and inserts fresh content without a prior read, so there is no stale
+    -- read for the hash check to catch (recorded in CONCEPT.md Decisions).
+    "capture" -> withParsed parseCapture $ \(content, mtitle, msource) ->
+      case validateCapture content mtitle msource of
+        Left err -> pure (Left err)
+        Right () -> do
+          nid <- UUID.toText <$> V4.nextRandom
+          ts <-
+            T.pack . formatTime defaultTimeLocale "[%Y-%m-%d %a %H:%M]"
+              <$> getZonedTime
+          let path = envNotesDir env </> "inbox.org"
+          exists <- doesFileExist path
+          old <-
+            if exists
+              then TE.decodeUtf8Lenient <$> BS.readFile path
+              else do
+                inboxId <- UUID.toText <$> V4.nextRandom
+                pure (renderNote inboxId "Inbox" ["inbox"] "")
+          let entry = renderCapture nid ts mtitle msource content
+              newBytes = TE.encodeUtf8 (appendBody old entry)
+          atomicWrite path newBytes
+          refreshIndex (envDb env) (envNotesDir env)
+          pure . Right $ object ["id" .= nid, "file" .= path, "hash" .= sha256Hex newBytes]
     _ -> pure (Left ("unknown tool: " <> name))
   where
     withParsed :: (Object -> Parser a) -> (a -> IO (Either Text Value)) -> IO (Either Text Value)
@@ -320,6 +372,11 @@ callTool env name args = do
         <$> o .: "id"
         <*> o .: "content"
         <*> o .: "hash"
+    parseCapture o =
+      (,,)
+        <$> o .: "content"
+        <*> o .:? "title"
+        <*> o .:? "source"
     parseUpdate o =
       (,,,,)
         <$> o .: "id"
@@ -344,6 +401,29 @@ validateUpdate mcontent mtitle mtags
 renderTags :: [Text] -> Maybe Text
 renderTags [] = Nothing
 renderTags tags = Just (":" <> T.intercalate ":" tags <> ":")
+
+validateCapture :: Text -> Maybe Text -> Maybe Text -> Either Text ()
+validateCapture content mtitle msource
+  | T.null (T.strip content) = Left "nothing to capture: content is empty"
+  | Just ti <- mtitle, T.null (T.strip ti) || T.any (== '\n') ti =
+      Left "invalid title: must be a single non-empty line"
+  | Just src <- msource, T.null (T.strip src) || T.any (== '\n') src =
+      Left "invalid source: must be a single non-empty line"
+  | otherwise = Right ()
+
+-- | One inbox entry: a top-level headline carrying its own ID, so each
+-- capture is individually addressable and processable. The timestamp leads
+-- the headline for scannability; the drawer holds the structured copy.
+renderCapture :: Text -> Text -> Maybe Text -> Maybe Text -> Text -> Text
+renderCapture nid ts mtitle msource content =
+  T.unlines $
+    [ "* " <> ts <> maybe "" (" " <>) mtitle
+    , ":PROPERTIES:"
+    , ":ID: " <> nid
+    , ":CREATED: " <> ts
+    ]
+      <> [":SOURCE: " <> src | Just src <- [msource]]
+      <> [":END:", T.stripEnd content]
 
 -- | Accept a rewrite only if the result still parses and keeps every node
 -- ID the file had before — refusals name the IDs so the agent can retry.
