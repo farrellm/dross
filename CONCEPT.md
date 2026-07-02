@@ -188,6 +188,16 @@ Roughly ordered by value:
 - `capture` is append-only and **exempt from the hash check** — it inserts
   fresh content without a prior read, so there is nothing to go stale. All
   other mutations keep check-then-refuse.
+- Telegram bot wiring: the bot (`dross-bot/`) is an **MCP client of
+  dross-mcp** — it spawns the server as a subprocess and speaks
+  newline-delimited JSON-RPC over stdio, so every write goes through the
+  decided write policy (atomic writes, IDs, indexing) instead of
+  reimplementing it in Go. Text/links/forwards → `capture` (forwards
+  credit the origin in `:SOURCE:`); photos and files are downloaded and
+  fed to `archive-document`, caption first line as title. Config is
+  env-only: `TELEGRAM_TOKEN`, `DROSS_NOTES_DIR`, `DROSS_TELEGRAM_CHAT_ID`
+  (the allowlist; unset = refuse and reply with the sender's chat ID for
+  first-time setup), optional `DROSS_MCP_BIN`.
 - Document archive: **org-attach uuid-folder layout** —
   `data/<2 chars>/<rest of id>/` under the notes root, matching Emacs
   org-attach defaults so `org-attach-open` works. The literature note links

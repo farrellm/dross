@@ -15,7 +15,7 @@ there.
 
 ## Commands
 
-All from `dross-mcp/`:
+MCP server, all from `dross-mcp/`:
 
 ```sh
 cabal build --enable-tests   # build server + tests
@@ -30,6 +30,20 @@ make db-destroy   # drop container + volume (only costs a re-index)
 
 cabal list-bin dross-mcp   # path to the built binary
 ```
+
+Telegram bot, all from `dross-bot/`:
+
+```sh
+go build -o dross-bot .   # single static binary
+go vet ./...
+go test ./...             # MCP-client smoke test; needs DROSS_MCP_BIN + running DB, skips otherwise
+TELEGRAM_TOKEN=... DROSS_NOTES_DIR=~/notes DROSS_TELEGRAM_CHAT_ID=<id> ./dross-bot
+```
+
+The bot spawns `dross-mcp` (found on PATH, or `DROSS_MCP_BIN`) and calls
+its tools over stdio — it never writes org files itself. With
+`DROSS_TELEGRAM_CHAT_ID` unset it refuses captures and replies with the
+sender's chat ID (first-time setup).
 
 Smoke test: pipe newline-delimited JSON-RPC into the binary (`initialize`,
 `tools/list`, `tools/call`), then inspect the index with `make db-psql` or
@@ -95,6 +109,11 @@ Postgres (tsvector FTS + pgvector) → MCP tools over stdio.
   network, and a missing key just disables that one tool. Embeddings are
   keyed by `(content_sha256, model)`, not chunk id, so they survive
   re-indexing; only changed content is re-embedded.
+- `dross-bot/` — Go Telegram capture bot (`main.go` telegram wiring,
+  `mcp.go` minimal MCP stdio client). It is an MCP *client*: it spawns
+  `dross-mcp` and routes text/forwards to `capture` and photos/files to
+  `archive-document`, so the write policy stays server-side. Single shared
+  subprocess guarded by a mutex; restarted once on transport failure.
 - `db/schema.sql` — canonical schema, applied via `make db-migrate`; every
   statement must stay idempotent (`IF NOT EXISTS` / `ON CONFLICT`). The
   `embeddings` table is `vector(1024)` for voyage-3.5, keyed by content
