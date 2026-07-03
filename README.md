@@ -65,8 +65,8 @@ search, process the inbox, ask questions of the archive.
 create a bot with [@BotFather](https://t.me/BotFather), then
 
 ```sh
-cd dross-bot && go build -o dross-bot .
-TELEGRAM_TOKEN=... DROSS_NOTES_DIR=~/notes ./dross-bot
+cd dross-bot && make build
+TELEGRAM_TOKEN=... DROSS_NOTES_DIR=~/notes make run
 ```
 
 Message your bot once; it replies with your chat ID. Restart with
@@ -102,8 +102,11 @@ by hand.
 
 ```sh
 cd dross-mcp && cabal build --enable-tests && cabal test
-cd dross-bot && go build -o dross-bot . && go vet ./... && go test ./...
+cd dross-bot && make build && go vet ./... && go test ./...
 ```
+
+The bot's `make watch` runs a [wgo](https://github.com/bokwoon95/wgo)
+live-reload loop (rebuild + restart on source change).
 
 `dross-mcp/README.md` has the server details (schema, environment
 variables, smoke-testing); `CLAUDE.md` orients coding agents working on
