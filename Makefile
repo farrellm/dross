@@ -1,7 +1,8 @@
 # Dross — single entry point for the whole repo (run from the root).
 #
-# Two groups of targets:
+# `make` or `make help` lists every target. Three groups:
 #   db-*   Postgres-in-Docker for the dross-mcp index
+#   mcp-*  build / test / run the Haskell MCP server
 #   bot-*  build / run the Go Telegram bot
 #
 # The dross-mcp server connects using DROSS_DB (libpq connection string); the
@@ -20,9 +21,18 @@ PGDB      := dross
 DROSS_MCP_BIN ?= $(shell cd dross-mcp && cabal list-bin dross-mcp 2>/dev/null)
 export DROSS_MCP_BIN
 
-.PHONY: db-create db-start db-stop db-migrate db-psql db-destroy db-wait \
+.DEFAULT_GOAL := help
+
+.PHONY: help db-create db-start db-stop db-migrate db-psql db-destroy db-wait \
         mcp-build mcp-test mcp-run mcp-install mcp-watch \
         bot-build bot-run bot-watch
+
+## list all targets
+help:
+	@awk '/^## / { desc = substr($$0, 4); next } \
+	  /^[a-zA-Z0-9_-]+:/ { if (desc) { name = $$0; sub(/:.*/, "", name); \
+	    printf "  \033[36m%-13s\033[0m %s\n", name, desc; desc = "" } next } \
+	  { desc = "" }' $(MAKEFILE_LIST)
 
 ## create the container + data volume and run the initial migration
 db-create:
@@ -55,8 +65,7 @@ db-psql:
 db-stop:
 	docker stop $(CONTAINER)
 
-## remove the container AND the data volume (the index is a rebuildable
-## cache, so this only costs a re-index)
+## remove the container + data volume (index is a cache; only costs a re-index)
 db-destroy:
 	-docker rm -f $(CONTAINER)
 	-docker volume rm $(VOLUME)

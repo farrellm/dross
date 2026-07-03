@@ -19,6 +19,8 @@ A single root `Makefile` drives the whole repo (`db-*` = Postgres/Docker
 index, `bot-*` = the Go bot); run these from the repo root:
 
 ```sh
+make              # or `make help`: list every target
+
 make db-create    # first time: pgvector/pgvector container + volume + migration
 make db-start     # after reboot/db-stop
 make db-migrate   # re-apply db/schema.sql (idempotent; this is the only migration mechanism)
