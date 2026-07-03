@@ -50,7 +50,7 @@ make db-create        # once; afterwards: make db-start
 
 ```sh
 cd dross-mcp
-cabal install --installdir=bin --overwrite-policy=always
+cabal install --installdir=bin --overwrite-policy=always   # or, from the root: make mcp-install
 claude mcp add dross --env VOYAGE_API_KEY=... -- $(pwd)/bin/dross-mcp ~/notes
 ```
 
@@ -101,7 +101,7 @@ by hand.
 ## Development
 
 ```sh
-(cd dross-mcp && cabal build --enable-tests && cabal test)
+make mcp-build && make mcp-test
 make bot-build && (cd dross-bot && go vet ./... && go test ./...)
 ```
 

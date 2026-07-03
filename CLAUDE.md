@@ -25,16 +25,20 @@ make db-migrate   # re-apply db/schema.sql (idempotent; this is the only migrati
 make db-psql      # inspect the index
 make db-destroy   # drop container + volume (only costs a re-index)
 
+make mcp-build    # cabal build --enable-tests (server + tests)
+make mcp-test     # cabal test (single exitcode-stdio suite in test/Spec.hs)
+make mcp-run      # cabal run dross-mcp against DROSS_NOTES_DIR (env/.envrc)
+make mcp-install  # cabal install into dross-mcp/bin (for `claude mcp add`)
+make mcp-watch    # ghcid typecheck/reload loop
+
 make bot-build    # go build -o dross-bot
 make bot-run      # build + run (token/notes-dir from env/.envrc; DROSS_MCP_BIN auto-set to the cabal binary)
 make bot-watch    # live-reload dev loop via wgo
 ```
 
-MCP server, from `dross-mcp/`:
+MCP server, from `dross-mcp/` (the `mcp-*` targets above wrap these):
 
 ```sh
-cabal build --enable-tests   # build server + tests
-cabal test                   # parser test suite (single exitcode-stdio suite in test/Spec.hs)
 cabal run dross-mcp -- ~/notes   # run against a notes directory (or set DROSS_NOTES_DIR)
 cabal list-bin dross-mcp   # path to the built binary
 ```

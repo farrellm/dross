@@ -21,6 +21,7 @@ DROSS_MCP_BIN ?= $(shell cd dross-mcp && cabal list-bin dross-mcp 2>/dev/null)
 export DROSS_MCP_BIN
 
 .PHONY: db-create db-start db-stop db-migrate db-psql db-destroy db-wait \
+        mcp-build mcp-test mcp-run mcp-install mcp-watch \
         bot-build bot-run bot-watch
 
 ## create the container + data volume and run the initial migration
@@ -59,6 +60,26 @@ db-stop:
 db-destroy:
 	-docker rm -f $(CONTAINER)
 	-docker volume rm $(VOLUME)
+
+## build the server + test suite
+mcp-build:
+	cd dross-mcp && cabal build --enable-tests
+
+## run the parser test suite
+mcp-test:
+	cd dross-mcp && cabal test
+
+## run the server against DROSS_NOTES_DIR (from env / .envrc)
+mcp-run:
+	cd dross-mcp && cabal run dross-mcp
+
+## install the binary into dross-mcp/bin (for `claude mcp add`)
+mcp-install:
+	cd dross-mcp && cabal install --installdir=bin --overwrite-policy=always
+
+## ghcid typecheck/reload loop
+mcp-watch:
+	cd dross-mcp && ghcid
 
 ## compile the bot's static binary
 bot-build:

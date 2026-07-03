@@ -64,12 +64,18 @@ the Makefile's container
 
 ## Build and test
 
+The `mcp-*` targets in the repo's root `Makefile` wrap these (run from the
+repo root): `make mcp-build`, `make mcp-test`, `make mcp-watch` (a `ghcid`
+typecheck loop).
+
 ```sh
 cabal build
 cabal test
 ```
 
 ## Run
+
+`make mcp-run` from the repo root, or directly:
 
 ```sh
 DROSS_NOTES_DIR=~/notes cabal run dross-mcp
