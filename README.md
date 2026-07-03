@@ -43,13 +43,13 @@ auto-commit and proposals).
 **1. Database** (pgvector container on `127.0.0.1:5433`):
 
 ```sh
-cd dross-mcp
 make db-create        # once; afterwards: make db-start
 ```
 
 **2. MCP server**, registered with Claude Code:
 
 ```sh
+cd dross-mcp
 cabal install --installdir=bin --overwrite-policy=always
 claude mcp add dross --env VOYAGE_API_KEY=... -- $(pwd)/bin/dross-mcp ~/notes
 ```
@@ -65,8 +65,8 @@ search, process the inbox, ask questions of the archive.
 create a bot with [@BotFather](https://t.me/BotFather), then
 
 ```sh
-cd dross-bot && make build
-TELEGRAM_TOKEN=... DROSS_NOTES_DIR=~/notes make run
+make bot-build
+TELEGRAM_TOKEN=... DROSS_NOTES_DIR=~/notes make bot-run
 ```
 
 Message your bot once; it replies with your chat ID. Restart with
@@ -101,12 +101,12 @@ by hand.
 ## Development
 
 ```sh
-cd dross-mcp && cabal build --enable-tests && cabal test
-cd dross-bot && make build && go vet ./... && go test ./...
+(cd dross-mcp && cabal build --enable-tests && cabal test)
+make bot-build && (cd dross-bot && go vet ./... && go test ./...)
 ```
 
-The bot's `make watch` runs a [wgo](https://github.com/bokwoon95/wgo)
-live-reload loop (rebuild + restart on source change).
+`make bot-watch` runs a [wgo](https://github.com/bokwoon95/wgo)
+live-reload loop for the bot (rebuild + restart on source change).
 
 `dross-mcp/README.md` has the server details (schema, environment
 variables, smoke-testing); `CLAUDE.md` orients coding agents working on

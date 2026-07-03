@@ -15,33 +15,36 @@ there.
 
 ## Commands
 
-MCP server, all from `dross-mcp/`:
+A single root `Makefile` drives the whole repo (`db-*` = Postgres/Docker
+index, `bot-*` = the Go bot); run these from the repo root:
 
 ```sh
-cabal build --enable-tests   # build server + tests
-cabal test                   # parser test suite (single exitcode-stdio suite in test/Spec.hs)
-cabal run dross-mcp -- ~/notes   # run against a notes directory (or set DROSS_NOTES_DIR)
-
 make db-create    # first time: pgvector/pgvector container + volume + migration
 make db-start     # after reboot/db-stop
 make db-migrate   # re-apply db/schema.sql (idempotent; this is the only migration mechanism)
 make db-psql      # inspect the index
 make db-destroy   # drop container + volume (only costs a re-index)
 
+make bot-build    # go build -o dross-bot
+make bot-run      # build + run (token/notes-dir from env/.envrc; DROSS_MCP_BIN auto-set to the cabal binary)
+make bot-watch    # live-reload dev loop via wgo
+```
+
+MCP server, from `dross-mcp/`:
+
+```sh
+cabal build --enable-tests   # build server + tests
+cabal test                   # parser test suite (single exitcode-stdio suite in test/Spec.hs)
+cabal run dross-mcp -- ~/notes   # run against a notes directory (or set DROSS_NOTES_DIR)
 cabal list-bin dross-mcp   # path to the built binary
 ```
 
-Telegram bot, all from `dross-bot/`:
+Telegram bot, from `dross-bot/`:
 
 ```sh
-go build -o dross-bot .   # single static binary
 go vet ./...
 go test ./...             # git-proposal + splitter tests always run; the MCP smoke test needs DROSS_MCP_BIN + running DB, skips otherwise
 TELEGRAM_TOKEN=... DROSS_NOTES_DIR=~/notes DROSS_TELEGRAM_CHAT_ID=<id> ./dross-bot
-
-make build   # go build -o dross-bot
-make run     # build + run (token/notes-dir from env/.envrc; DROSS_MCP_BIN auto-set to the cabal binary)
-make watch   # live-reload dev loop via wgo
 ./dross-bot send < msg.txt          # one-shot: deliver stdin to the chat
 ./dross-bot propose proposal/<slug> # one-shot: announce a proposal branch with Approve/Reject buttons
 ```
