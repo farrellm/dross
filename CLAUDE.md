@@ -38,6 +38,10 @@ go build -o dross-bot .   # single static binary
 go vet ./...
 go test ./...             # git-proposal + splitter tests always run; the MCP smoke test needs DROSS_MCP_BIN + running DB, skips otherwise
 TELEGRAM_TOKEN=... DROSS_NOTES_DIR=~/notes DROSS_TELEGRAM_CHAT_ID=<id> ./dross-bot
+
+make build   # go build -o dross-bot
+make run     # build + run (token/notes-dir from env/.envrc; DROSS_MCP_BIN auto-set to the cabal binary)
+make watch   # live-reload dev loop via wgo
 ./dross-bot send < msg.txt          # one-shot: deliver stdin to the chat
 ./dross-bot propose proposal/<slug> # one-shot: announce a proposal branch with Approve/Reject buttons
 ```
