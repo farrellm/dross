@@ -62,6 +62,7 @@ db-migrate: db-wait
 db-psql:
 	docker exec -it $(CONTAINER) psql -U $(PGUSER) -d $(PGDB)
 
+## stop the container (data volume persists)
 db-stop:
 	docker stop $(CONTAINER)
 
