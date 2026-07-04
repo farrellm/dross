@@ -4,7 +4,8 @@ package main
 // Inbound: text/forwards are appended to the inbox via the MCP server's
 // capture tool (with "connects to" nudges from similar-notes); messages
 // leading with a URL are snapshotted (web.go) and archived, like photos
-// and files, via archive-document. Outbound: one-shot
+// and files, via archive-document — every archive also drops a pointer
+// entry in the inbox so triage finds the stub note. Outbound: one-shot
 // `send` and `propose <branch>` modes for the scheduled proactive jobs
 // (../proactive/), and inline Approve/Reject buttons on proposals handled
 // here via git in the notes repo.
@@ -117,7 +118,7 @@ func (a *app) handle(ctx context.Context, b *bot.Bot, update *models.Update) {
 	case strings.HasPrefix(msg.Text, "/"):
 		reply(ctx, b, msg,
 			"Send me anything to capture it in your Dross inbox.\n"+
-				"Text and forwards land in inbox.org; photos and files are archived with a literature note.\n"+
+				"Text and forwards land in inbox.org; photos and files are archived with a literature note plus an inbox entry pointing at it.\n"+
 				"A message starting with a URL is archived too: I save a self-contained snapshot of the page (images included).")
 	case len(msg.Photo) > 0:
 		a.archivePhoto(ctx, b, msg)
@@ -191,6 +192,38 @@ func (a *app) relatedNotes(captureResult string) string {
 	return strings.Join(lines, "\n")
 }
 
+// inboxEntryArgs builds the capture args for the inbox entry that points at
+// a freshly archived note, so inbox triage sees the stub and fleshes it out.
+// Returns nil if the archive result carries no note id.
+func inboxEntryArgs(archiveResult, title, src string) map[string]any {
+	var note struct {
+		ID string `json:"id"`
+	}
+	if err := json.Unmarshal([]byte(archiveResult), &note); err != nil || note.ID == "" {
+		return nil
+	}
+	return map[string]any{
+		"content": "Flesh out [[id:" + note.ID + "][" + title + "]]",
+		"title":   title,
+		"source":  src,
+	}
+}
+
+// addInboxEntry is best-effort: the note is already archived, so a failed
+// inbox entry is logged and reported in the reply, never fatal.
+func (a *app) addInboxEntry(archiveResult, title, src string) (ok bool) {
+	args := inboxEntryArgs(archiveResult, title, src)
+	if args == nil {
+		log.Printf("inbox entry skipped: no note id in archive result")
+		return false
+	}
+	if _, err := a.mcp.CallTool("capture", args); err != nil {
+		log.Printf("inbox entry for %q failed: %v", title, err)
+		return false
+	}
+	return true
+}
+
 func (a *app) archivePhoto(ctx context.Context, b *bot.Bot, msg *models.Message) {
 	best := msg.Photo[0]
 	for _, p := range msg.Photo[1:] {
@@ -251,15 +284,21 @@ func (a *app) archive(ctx context.Context, b *bot.Bot, msg *models.Message, file
 	if body != "" {
 		args["content"] = body
 	}
-	if _, err := a.mcp.CallTool("archive-document", args); err != nil {
+	res, err := a.mcp.CallTool("archive-document", args)
+	if err != nil {
 		replyErr(ctx, b, msg, err)
 		return
 	}
-	reply(ctx, b, msg, "Archived: "+title)
+	text := "Archived: " + title
+	if !a.addInboxEntry(res, title, source(msg)) {
+		text += "\n(couldn't add the inbox entry)"
+	}
+	reply(ctx, b, msg, text)
 }
 
 // archiveURL snapshots a captured URL (self-contained HTML, images inlined)
-// and archives it as a literature note tagged inbox so triage still sees it.
+// and archives it as a literature note, plus an inbox entry pointing at it
+// so triage still sees it.
 // The message text after the URL becomes the note body; readability-extracted
 // text is indexed via archive-document's text parameter. A failed fetch falls
 // back to a plain inbox capture — the URL is never lost. Arxiv links of any
@@ -316,7 +355,6 @@ func (a *app) archiveURL(ctx context.Context, b *bot.Bot, msg *models.Message, p
 		"path":   path,
 		"title":  title,
 		"source": src,
-		"tags":   []string{"inbox"},
 	}
 	if body != "" {
 		args["content"] = body
@@ -347,6 +385,9 @@ func (a *app) archiveURL(ctx context.Context, b *bot.Bot, msg *models.Message, p
 	}
 
 	text := "Archived: " + title + "\n" + pageURL + pdfNote
+	if !a.addInboxEntry(res, title, src) {
+		text += "\n(couldn't add the inbox entry)"
+	}
 	if strings.HasPrefix(page.contentType, "text/html") && page.text == "" && args["text"] == nil {
 		text += "\n(no readable text extracted — the page may need JavaScript; only the snapshot was saved)"
 	}

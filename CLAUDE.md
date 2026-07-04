@@ -149,10 +149,13 @@ Postgres (tsvector FTS + pgvector) → MCP tools over stdio.
   announce/approve/reject). It is an MCP *client*:
   it spawns `dross-mcp` and routes text/forwards to `capture` (reply
   includes similar-notes nudges, best-effort) and photos/files to
-  `archive-document`, so the write policy stays server-side. Messages
+  `archive-document`, so the write policy stays server-side. Every
+  archive is followed by a best-effort `capture` of an inbox entry
+  linking `[[id:...]]` to the stub note — that entry, not a tag, is the
+  triage marker. Messages
   starting with a URL are snapshotted client-side (obelisk self-contained
-  HTML + readability-extracted text) and archived via `archive-document`
-  with an extra `inbox` tag, falling back to `capture` if the fetch fails.
+  HTML + readability-extracted text) and archived via `archive-document`,
+  falling back to `capture` if the fetch fails.
   Arxiv links (any of `/abs/`, `/pdf/`, `/html/`) are normalized: the abs
   page is snapshotted and the PDF attached via `extra_paths`, with
   pdftotext full text as the indexed `text` — PDF download and extraction

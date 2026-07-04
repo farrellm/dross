@@ -35,14 +35,13 @@ see `CONCEPT.md` in the dross repo for the system design.
 
 ### Inbox processing
 
-For each `:inbox:` entry (find them via `search` for tag inbox — not just
-`inbox.org`: URLs captured via the bot arrive as separate literature notes
-tagged `:literature:inbox:ATTACH:`): draft a properly titled, tagged
-permanent or literature note; run link suggestion (below); show me the
-draft (with proposed links) for approval before creating it and before
-removing anything from the inbox. Processing an archived-URL note means
-reviewing/fleshing out the literature note and removing its `inbox` tag
-(a proposal, per ground rules).
+For each `:inbox:` entry: draft a properly titled, tagged permanent or
+literature note; run link suggestion (below); show me the draft (with
+proposed links) for approval before creating it and before removing
+anything from the inbox. Documents and URLs captured via the bot arrive as
+stub literature notes plus an inbox entry whose body links `[[id:...]]` to
+the stub — processing that entry means reviewing/fleshing out the linked
+literature note, then removing the entry like any other.
 
 ### Link suggestion
 
