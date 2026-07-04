@@ -9,7 +9,7 @@ module Dross.Tools
   , renderNote
   ) where
 
-import Control.Monad (when)
+import Control.Monad (filterM, when, zipWithM_)
 import Crypto.Hash.SHA256 qualified as SHA256
 import Data.Aeson
 import Data.Aeson.Types (Parser, parseEither)
@@ -373,6 +373,12 @@ toolDefs =
                       [ "type" .= t "string"
                       , "description" .= t "Extracted plain text of the document (optional). Stored beside the attachment and indexed, so search and semantic-search cover the document's content; extraction (pdftotext, OCR, ...) is the caller's job."
                       ]
+                , "extra_paths"
+                    .= object
+                      [ "type" .= t "array"
+                      , "items" .= object ["type" .= t "string"]
+                      , "description" .= t "Additional local files to attach to the same note (optional), e.g. the PDF alongside a page snapshot"
+                      ]
                 ]
           , "required" .= [t "path", t "title"]
           ]
@@ -552,49 +558,54 @@ callTool env name args = do
     -- Like create-note, this writes a brand-new note file (no existing
     -- note to conflict with), so there is no hash parameter; the copied
     -- document lands in the org-attach uuid layout Emacs expects.
-    "archive-document" -> withParsed parseArchive $ \(path, title, msource, content, tags, extractText) ->
+    "archive-document" -> withParsed parseArchive $ \(path, title, msource, content, tags, extractText, extraPaths) ->
       case validateArchive title msource tags of
         Left err -> pure (Left err)
         Right () -> do
-          srcExists <- doesFileExist path
-          if not srcExists
-            then pure (Left ("no such file: " <> T.pack path))
-            else do
+          missing <- filterM (fmap not . doesFileExist) (path : extraPaths)
+          case missing of
+            m : _ -> pure (Left ("no such file: " <> T.pack m))
+            [] -> do
               nid <- UUID.toText <$> V4.nextRandom
               let attachRel =
                     "data" </> T.unpack (T.take 2 nid) </> T.unpack (T.drop 2 nid)
                   attachDir = envNotesDir env </> attachRel
+                  sources = path : extraPaths
                   target = attachDir </> takeFileName path
+                  extraTargets = [attachDir </> takeFileName p | p <- extraPaths]
+                  targets = target : extraTargets
                   hasExtract = not (T.null (T.strip extractText))
               createDirectoryIfMissing True attachDir
-              copyFile path target
+              zipWithM_ copyFile sources targets
               -- The sidecar keeps extracted text on disk (source of truth);
               -- the note must be written before refreshIndex sees the
               -- sidecar, and it is, just below.
               when hasExtract $
                 atomicWrite (attachDir </> extractFileName) (TE.encodeUtf8 extractText)
               notePath <- freshPath (envNotesDir env) (slugify title) nid
-              let link :: Text
-                  link =
+              let link :: FilePath -> Text
+                  link p =
                     "[[file:"
-                      <> T.pack (attachRel </> takeFileName path)
+                      <> T.pack (attachRel </> takeFileName p)
                       <> "]["
-                      <> T.pack (takeFileName path)
+                      <> T.pack (takeFileName p)
                       <> "]]"
-                  body = link <> (if T.null content then "" else "\n\n" <> content)
+                  links = T.intercalate "\n" (map link sources)
+                  body = links <> (if T.null content then "" else "\n\n" <> content)
                   props = [("SOURCE", src) | Just src <- [msource]]
                   bytes =
                     TE.encodeUtf8 $
                       renderNote nid props title (["literature"] <> tags <> ["ATTACH"]) body
               atomicWrite notePath bytes
               commitMutation env ("dross: archive-document: " <> title) $
-                [notePath, target] <> [attachDir </> extractFileName | hasExtract]
+                [notePath] <> targets <> [attachDir </> extractFileName | hasExtract]
               refreshIndex (envDb env) (envNotesDir env)
               pure . Right $
                 object
                   [ "id" .= nid
                   , "file" .= notePath
                   , "attached" .= target
+                  , "extra_attached" .= extraTargets
                   , "extract"
                       .= (if hasExtract then Just (attachDir </> extractFileName) else Nothing)
                   , "hash" .= sha256Hex bytes
@@ -621,13 +632,14 @@ callTool env name args = do
         <*> o .:? "title"
         <*> o .:? "source"
     parseArchive o =
-      (,,,,,)
+      (,,,,,,)
         <$> o .: "path"
         <*> o .: "title"
         <*> o .:? "source"
         <*> o .:? "content" .!= ""
         <*> o .:? "tags" .!= []
         <*> o .:? "text" .!= ""
+        <*> o .:? "extra_paths" .!= []
     parseUpdate o =
       (,,,,)
         <$> o .: "id"

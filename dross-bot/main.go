@@ -262,17 +262,26 @@ func (a *app) archive(ctx context.Context, b *bot.Bot, msg *models.Message, file
 // and archives it as a literature note tagged inbox so triage still sees it.
 // The message text after the URL becomes the note body; readability-extracted
 // text is indexed via archive-document's text parameter. A failed fetch falls
-// back to a plain inbox capture — the URL is never lost. The fetch finishes
-// before CallTool, so the MCP mutex is never held during network I/O.
+// back to a plain inbox capture — the URL is never lost. Arxiv links of any
+// form (/abs/, /pdf/, /html/) are normalized: the abs page is snapshotted for
+// title/abstract, the PDF is downloaded alongside (best-effort) and its
+// pdftotext output replaces the abstract as the indexed text. All fetching
+// finishes before CallTool, so the MCP mutex is never held during network I/O.
 func (a *app) archiveURL(ctx context.Context, b *bot.Bot, msg *models.Message, pageURL, body string) {
 	_, _ = b.SendChatAction(ctx, &bot.SendChatActionParams{
 		ChatID: msg.Chat.ID,
 		Action: models.ChatActionUploadDocument,
 	})
 
-	page, err := fetchPage(ctx, pageURL)
+	fetchURL := pageURL
+	arxiv, isArxiv := arxivID(pageURL)
+	if isArxiv {
+		fetchURL = "https://arxiv.org/abs/" + arxiv
+	}
+
+	page, err := fetchPage(ctx, fetchURL)
 	if err != nil {
-		log.Printf("archiving %s failed, capturing instead: %v", pageURL, err)
+		log.Printf("archiving %s failed, capturing instead: %v", fetchURL, err)
 		a.captureTextWith(ctx, b, msg,
 			"Couldn't fetch the page — captured the link to inbox instead.")
 		return
@@ -293,7 +302,7 @@ func (a *app) archiveURL(ctx context.Context, b *bot.Bot, msg *models.Message, p
 		return
 	}
 	defer os.RemoveAll(dir)
-	path := filepath.Join(dir, snapshotName(page.title, pageURL, page.contentType))
+	path := filepath.Join(dir, snapshotName(page.title, fetchURL, page.contentType))
 	if err := os.WriteFile(path, page.data, 0o644); err != nil {
 		replyErr(ctx, b, msg, err)
 		return
@@ -315,20 +324,57 @@ func (a *app) archiveURL(ctx context.Context, b *bot.Bot, msg *models.Message, p
 	if page.text != "" {
 		args["text"] = page.text
 	}
+
+	pdfNote := ""
+	if isArxiv {
+		pdfPath, pdfText, pdfErr := a.arxivPDF(ctx, dir, arxiv)
+		if pdfErr != nil {
+			log.Printf("arxiv PDF for %s skipped: %v", arxiv, pdfErr)
+			pdfNote = "\n(couldn't download the PDF — only the abstract page was saved)"
+		} else {
+			args["extra_paths"] = []string{pdfPath}
+			if pdfText != "" {
+				args["text"] = pdfText
+			}
+			pdfNote = "\n(PDF attached)"
+		}
+	}
+
 	res, err := a.mcp.CallTool("archive-document", args)
 	if err != nil {
 		replyErr(ctx, b, msg, err)
 		return
 	}
 
-	text := "Archived: " + title + "\n" + pageURL
-	if strings.HasPrefix(page.contentType, "text/html") && page.text == "" {
+	text := "Archived: " + title + "\n" + pageURL + pdfNote
+	if strings.HasPrefix(page.contentType, "text/html") && page.text == "" && args["text"] == nil {
 		text += "\n(no readable text extracted — the page may need JavaScript; only the snapshot was saved)"
 	}
 	if related := a.relatedNotes(res); related != "" {
 		text += "\n\nConnects to:\n" + related
 	}
 	reply(ctx, b, msg, text)
+}
+
+// arxivPDF downloads the paper's PDF into dir and extracts its full text
+// with pdftotext. The download failing is an error (the caller falls back
+// to snapshot-only); extraction failing is not — a missing pdftotext just
+// means the abstract stays the indexed text.
+func (a *app) arxivPDF(ctx context.Context, dir, arxiv string) (path, text string, err error) {
+	data, err := fetchFile(ctx, "https://arxiv.org/pdf/"+arxiv)
+	if err != nil {
+		return "", "", err
+	}
+	name := strings.ReplaceAll(arxiv, "/", "-") + ".pdf"
+	path = filepath.Join(dir, name)
+	if err := os.WriteFile(path, data, 0o644); err != nil {
+		return "", "", err
+	}
+	text, terr := pdfText(ctx, path)
+	if terr != nil {
+		log.Printf("pdftotext on %s skipped: %v", name, terr)
+	}
+	return path, text, nil
 }
 
 func (a *app) download(ctx context.Context, b *bot.Bot, fileID, dest string) error {

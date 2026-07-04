@@ -74,7 +74,9 @@ Smoke-testing against a scratch notes dir repoints the shared index to it;
 that's safe (rebuildable cache) — the next run against real notes re-indexes.
 
 Host prerequisites: Docker (for the DB) and libpq + pg_config
-(`postgresql-libs` on Arch/Manjaro) to build `postgresql-simple`.
+(`postgresql-libs` on Arch/Manjaro) to build `postgresql-simple`;
+`pdftotext` (poppler) for arxiv full-text extraction (optional — the bot
+degrades to abstract-only indexing without it).
 
 The DB listens on `127.0.0.1:5433` (not 5432, to avoid clashing with any
 host Postgres). The server reads `DROSS_DB` (libpq connection string); its
@@ -150,7 +152,11 @@ Postgres (tsvector FTS + pgvector) → MCP tools over stdio.
   `archive-document`, so the write policy stays server-side. Messages
   starting with a URL are snapshotted client-side (obelisk self-contained
   HTML + readability-extracted text) and archived via `archive-document`
-  with an extra `inbox` tag, falling back to `capture` if the fetch fails. Single shared
+  with an extra `inbox` tag, falling back to `capture` if the fetch fails.
+  Arxiv links (any of `/abs/`, `/pdf/`, `/html/`) are normalized: the abs
+  page is snapshotted and the PDF attached via `extra_paths`, with
+  pdftotext full text as the indexed `text` — PDF download and extraction
+  are both best-effort. Single shared
   subprocess guarded by a mutex; restarted once on transport failure.
   Proposal callbacks run git in the notes repo; branch names are validated
   (`proposal/` prefix, slug charset, ≤56 chars) because callback data
