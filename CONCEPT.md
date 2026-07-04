@@ -248,9 +248,11 @@ Roughly ordered by value:
   org-attach defaults so `org-attach-open` works. The literature note links
   to the copy with a relative `file:` link, carries `:SOURCE:` in its
   drawer, and is tagged `:literature:ATTACH:`. `archive-document` takes a
-  **local file path** — URL fetching and text extraction are the client
-  agent's job; extracted text is passed via the `text` parameter and
-  indexed (see the extracted-text decision above).
+  **local file path** (plus optional **`extra_paths`** for further files —
+  all land in the same attach dir, each linked from the note body) — URL
+  fetching and text extraction are the client agent's job; extracted text
+  is passed via the `text` parameter and indexed (see the extracted-text
+  decision above).
 - URL capture: a message whose **first whitespace token is an http(s)
   URL** is archived, not inboxed — the bot snapshots the page with
   **obelisk** (one self-contained HTML file, resources inlined as data
@@ -264,5 +266,13 @@ Roughly ordered by value:
   tag. Fetch/archive failure (or a snapshot over 50 MB) falls back to
   plain `capture`, so the URL is never lost; JS-rendered pages archive as
   shells (the bot's reply says so). URL fetching stays the client's job —
-  the server is unchanged.
+  the server only gained the generic `extra_paths` parameter.
+- Arxiv capture: any arxiv paper link (`/abs/`, `/pdf/`, or `/html/`, any
+  arxiv host) is **normalized** — the bot snapshots the `/abs/` page for
+  title + abstract and downloads the PDF alongside via `extra_paths`, so
+  one literature note holds both. Full text is extracted with
+  **pdftotext** (poppler, found on PATH) and replaces the abstract as the
+  indexed `text`; both the PDF download and extraction are best-effort —
+  failure keeps the snapshot-only archive and the reply says what's
+  missing. The original URL, not the normalized one, is the `:SOURCE:`.
 

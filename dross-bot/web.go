@@ -9,8 +9,11 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"io"
 	"mime"
+	"net/http"
 	"net/url"
+	"os/exec"
 	"path"
 	"strings"
 	"time"
@@ -44,6 +47,89 @@ func splitURLMessage(text string) (pageURL, rest string, ok bool) {
 		return "", "", false
 	}
 	return first, strings.TrimSpace(remainder), true
+}
+
+// arxivID recognizes arxiv paper URLs — /abs/, /pdf/, or /html/ on any
+// arxiv host — and returns the paper id (version suffix kept, trailing .pdf
+// dropped). Old-style ids contain a slash (cs/0112017), so everything after
+// the section prefix is the id. Captures of any form are normalized by the
+// caller: snapshot https://arxiv.org/abs/<id>, download
+// https://arxiv.org/pdf/<id>.
+func arxivID(pageURL string) (string, bool) {
+	u, err := url.Parse(pageURL)
+	if err != nil {
+		return "", false
+	}
+	switch strings.ToLower(u.Host) {
+	case "arxiv.org", "www.arxiv.org", "export.arxiv.org":
+	default:
+		return "", false
+	}
+	var id string
+	for _, prefix := range []string{"/abs/", "/pdf/", "/html/"} {
+		if rest, ok := strings.CutPrefix(u.Path, prefix); ok {
+			id = strings.TrimSuffix(rest, ".pdf")
+			break
+		}
+	}
+	id = strings.Trim(id, "/")
+	if id == "" {
+		return "", false
+	}
+	return id, true
+}
+
+// fetchFile downloads a single file (no resource inlining — that's
+// fetchPage's job) with the same UA, timeout, and size budget as snapshots.
+func fetchFile(ctx context.Context, fileURL string) ([]byte, error) {
+	ctx, cancel := context.WithTimeout(ctx, fetchTimeout)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, fileURL, nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("User-Agent", fetchUserAgent)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("downloading %s: %w", fileURL, err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("downloading %s: %s", fileURL, resp.Status)
+	}
+	data, err := io.ReadAll(io.LimitReader(resp.Body, maxSnapshotBytes+1))
+	if err != nil {
+		return nil, fmt.Errorf("downloading %s: %w", fileURL, err)
+	}
+	if len(data) > maxSnapshotBytes {
+		return nil, fmt.Errorf("downloading %s: file too large (>%d bytes)", fileURL, maxSnapshotBytes)
+	}
+	if len(data) == 0 {
+		return nil, fmt.Errorf("downloading %s: empty response", fileURL)
+	}
+	return data, nil
+}
+
+// pdfText extracts a PDF's plain text via pdftotext (poppler), capped like
+// readability output. Best-effort by design: no pdftotext on PATH, or a
+// broken PDF, is an error the caller may ignore.
+func pdfText(ctx context.Context, pdfPath string) (string, error) {
+	bin, err := exec.LookPath("pdftotext")
+	if err != nil {
+		return "", fmt.Errorf("pdftotext not found: %w", err)
+	}
+	var out bytes.Buffer
+	cmd := exec.CommandContext(ctx, bin, pdfPath, "-")
+	cmd.Stdout = &out
+	if err := cmd.Run(); err != nil {
+		return "", fmt.Errorf("pdftotext %s: %w", pdfPath, err)
+	}
+	text := strings.TrimSpace(out.String())
+	if len(text) > maxExtractBytes {
+		text = text[:maxExtractBytes]
+	}
+	return text, nil
 }
 
 type webPage struct {

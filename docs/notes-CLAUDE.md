@@ -72,9 +72,12 @@ permanent notes.
 
 When archiving a document: extract its plain text (e.g. `pdftotext`) and
 pass it as `archive-document`'s `text` parameter so the document is
-searchable. (Web pages captured via the bot already arrive with a
-self-contained HTML snapshot attached and their readable text indexed —
-drafting starts from that indexed text.) Then draft the literature note
+searchable; related files that belong on the same note (e.g. a paper's PDF
+next to its landing-page snapshot) go in `extra_paths`. (Web pages captured
+via the bot already arrive with a self-contained HTML snapshot attached and
+their readable text indexed; arxiv links additionally carry the paper's PDF
+with its full text indexed — drafting starts from that indexed text.) Then
+draft the literature note
 body: what the source is, its
 key claims in my words, notable quotes with locators (page/section), each
 on its own line so they can be cited individually. Run link suggestion

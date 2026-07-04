@@ -127,6 +127,73 @@ func TestFetchPage(t *testing.T) {
 	})
 }
 
+func TestArxivID(t *testing.T) {
+	cases := []struct {
+		name string
+		url  string
+		id   string
+		ok   bool
+	}{
+		{"abs", "https://arxiv.org/abs/2401.12345", "2401.12345", true},
+		{"abs with version", "https://arxiv.org/abs/2401.12345v2", "2401.12345v2", true},
+		{"pdf", "https://arxiv.org/pdf/2401.12345", "2401.12345", true},
+		{"pdf with extension", "https://arxiv.org/pdf/2401.12345v3.pdf", "2401.12345v3", true},
+		{"html", "https://arxiv.org/html/2401.12345v1", "2401.12345v1", true},
+		{"old-style id", "https://arxiv.org/abs/cs/0112017", "cs/0112017", true},
+		{"old-style pdf", "https://arxiv.org/pdf/cs/0112017v1.pdf", "cs/0112017v1", true},
+		{"www host", "https://www.arxiv.org/abs/2401.12345", "2401.12345", true},
+		{"export host", "http://export.arxiv.org/abs/2401.12345", "2401.12345", true},
+		{"trailing slash", "https://arxiv.org/abs/2401.12345/", "2401.12345", true},
+		{"other arxiv page", "https://arxiv.org/list/cs.AI/recent", "", false},
+		{"abs root only", "https://arxiv.org/abs/", "", false},
+		{"lookalike host", "https://notarxiv.org/abs/2401.12345", "", false},
+		{"unrelated url", "https://example.com/abs/2401.12345", "", false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			id, ok := arxivID(c.url)
+			if id != c.id || ok != c.ok {
+				t.Errorf("arxivID(%q) = (%q, %v), want (%q, %v)", c.url, id, ok, c.id, c.ok)
+			}
+		})
+	}
+}
+
+func TestFetchFile(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/doc.pdf", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/pdf")
+		_, _ = w.Write([]byte("%PDF-1.4 fake"))
+	})
+	mux.HandleFunc("/huge", func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write(make([]byte, maxSnapshotBytes+1))
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	t.Run("success", func(t *testing.T) {
+		data, err := fetchFile(context.Background(), srv.URL+"/doc.pdf")
+		if err != nil {
+			t.Fatalf("fetchFile: %v", err)
+		}
+		if string(data) != "%PDF-1.4 fake" {
+			t.Errorf("data = %q, want raw file bytes", data)
+		}
+	})
+
+	t.Run("404", func(t *testing.T) {
+		if _, err := fetchFile(context.Background(), srv.URL+"/missing"); err == nil {
+			t.Error("expected error for 404, got nil")
+		}
+	})
+
+	t.Run("size capped", func(t *testing.T) {
+		if _, err := fetchFile(context.Background(), srv.URL+"/huge"); err == nil {
+			t.Error("expected error for oversized file, got nil")
+		}
+	})
+}
+
 func TestSnapshotName(t *testing.T) {
 	cases := []struct {
 		name                    string
