@@ -35,10 +35,14 @@ see `CONCEPT.md` in the dross repo for the system design.
 
 ### Inbox processing
 
-For each `:inbox:` entry (find them via `search` for tag inbox / read
-`inbox.org`): draft a properly titled, tagged permanent or literature note;
-run link suggestion (below); show me the draft (with proposed links) for
-approval before creating it and before removing anything from the inbox.
+For each `:inbox:` entry (find them via `search` for tag inbox — not just
+`inbox.org`: URLs captured via the bot arrive as separate literature notes
+tagged `:literature:inbox:ATTACH:`): draft a properly titled, tagged
+permanent or literature note; run link suggestion (below); show me the
+draft (with proposed links) for approval before creating it and before
+removing anything from the inbox. Processing an archived-URL note means
+reviewing/fleshing out the literature note and removing its `inbox` tag
+(a proposal, per ground rules).
 
 ### Link suggestion
 
@@ -68,7 +72,10 @@ permanent notes.
 
 When archiving a document: extract its plain text (e.g. `pdftotext`) and
 pass it as `archive-document`'s `text` parameter so the document is
-searchable. Then draft the literature note body: what the source is, its
+searchable. (Web pages captured via the bot already arrive with a
+self-contained HTML snapshot attached and their readable text indexed —
+drafting starts from that indexed text.) Then draft the literature note
+body: what the source is, its
 key claims in my words, notable quotes with locators (page/section), each
 on its own line so they can be cited individually. Run link suggestion
 against existing notes; propose permanent notes for ideas worth extracting.

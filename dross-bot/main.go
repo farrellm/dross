@@ -1,9 +1,10 @@
 package main
 
 // dross-bot: Telegram frontend for Dross (CONCEPT.md, roadmap phases 2+4).
-// Inbound: text/links/forwards are appended to the inbox via the MCP
-// server's capture tool (with "connects to" nudges from similar-notes);
-// photos and files are archived via archive-document. Outbound: one-shot
+// Inbound: text/forwards are appended to the inbox via the MCP server's
+// capture tool (with "connects to" nudges from similar-notes); messages
+// leading with a URL are snapshotted (web.go) and archived, like photos
+// and files, via archive-document. Outbound: one-shot
 // `send` and `propose <branch>` modes for the scheduled proactive jobs
 // (../proactive/), and inline Approve/Reject buttons on proposals handled
 // here via git in the notes repo.
@@ -15,6 +16,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"net/url"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -115,19 +117,28 @@ func (a *app) handle(ctx context.Context, b *bot.Bot, update *models.Update) {
 	case strings.HasPrefix(msg.Text, "/"):
 		reply(ctx, b, msg,
 			"Send me anything to capture it in your Dross inbox.\n"+
-				"Text, links, and forwards land in inbox.org; photos and files are archived with a literature note.")
+				"Text and forwards land in inbox.org; photos and files are archived with a literature note.\n"+
+				"A message starting with a URL is archived too: I save a self-contained snapshot of the page (images included).")
 	case len(msg.Photo) > 0:
 		a.archivePhoto(ctx, b, msg)
 	case msg.Document != nil:
 		a.archiveFile(ctx, b, msg)
 	case strings.TrimSpace(msg.Text) != "":
-		a.captureText(ctx, b, msg)
+		if pageURL, rest, ok := splitURLMessage(msg.Text); ok {
+			a.archiveURL(ctx, b, msg, pageURL, rest)
+		} else {
+			a.captureText(ctx, b, msg)
+		}
 	default:
 		reply(ctx, b, msg, "Nothing capturable here — I take text, photos, and files.")
 	}
 }
 
 func (a *app) captureText(ctx context.Context, b *bot.Bot, msg *models.Message) {
+	a.captureTextWith(ctx, b, msg, "Captured to inbox.")
+}
+
+func (a *app) captureTextWith(ctx context.Context, b *bot.Bot, msg *models.Message, confirm string) {
 	args := map[string]any{
 		"content": msg.Text,
 		"source":  source(msg),
@@ -137,7 +148,7 @@ func (a *app) captureText(ctx context.Context, b *bot.Bot, msg *models.Message) 
 		replyErr(ctx, b, msg, err)
 		return
 	}
-	text := "Captured to inbox."
+	text := confirm
 	if related := a.relatedNotes(res); related != "" {
 		text += "\n\nConnects to:\n" + related
 	}
@@ -245,6 +256,79 @@ func (a *app) archive(ctx context.Context, b *bot.Bot, msg *models.Message, file
 		return
 	}
 	reply(ctx, b, msg, "Archived: "+title)
+}
+
+// archiveURL snapshots a captured URL (self-contained HTML, images inlined)
+// and archives it as a literature note tagged inbox so triage still sees it.
+// The message text after the URL becomes the note body; readability-extracted
+// text is indexed via archive-document's text parameter. A failed fetch falls
+// back to a plain inbox capture — the URL is never lost. The fetch finishes
+// before CallTool, so the MCP mutex is never held during network I/O.
+func (a *app) archiveURL(ctx context.Context, b *bot.Bot, msg *models.Message, pageURL, body string) {
+	_, _ = b.SendChatAction(ctx, &bot.SendChatActionParams{
+		ChatID: msg.Chat.ID,
+		Action: models.ChatActionUploadDocument,
+	})
+
+	page, err := fetchPage(ctx, pageURL)
+	if err != nil {
+		log.Printf("archiving %s failed, capturing instead: %v", pageURL, err)
+		a.captureTextWith(ctx, b, msg,
+			"Couldn't fetch the page — captured the link to inbox instead.")
+		return
+	}
+
+	title := page.title
+	if title == "" {
+		if u, uerr := url.Parse(pageURL); uerr == nil {
+			title = strings.TrimSpace(u.Host + u.Path)
+		} else {
+			title = pageURL
+		}
+	}
+
+	dir, err := os.MkdirTemp("", "dross-capture-")
+	if err != nil {
+		replyErr(ctx, b, msg, err)
+		return
+	}
+	defer os.RemoveAll(dir)
+	path := filepath.Join(dir, snapshotName(page.title, pageURL, page.contentType))
+	if err := os.WriteFile(path, page.data, 0o644); err != nil {
+		replyErr(ctx, b, msg, err)
+		return
+	}
+
+	src := pageURL
+	if from := source(msg); from != "telegram" {
+		src += " (via " + from + ")"
+	}
+	args := map[string]any{
+		"path":   path,
+		"title":  title,
+		"source": src,
+		"tags":   []string{"inbox"},
+	}
+	if body != "" {
+		args["content"] = body
+	}
+	if page.text != "" {
+		args["text"] = page.text
+	}
+	res, err := a.mcp.CallTool("archive-document", args)
+	if err != nil {
+		replyErr(ctx, b, msg, err)
+		return
+	}
+
+	text := "Archived: " + title + "\n" + pageURL
+	if strings.HasPrefix(page.contentType, "text/html") && page.text == "" {
+		text += "\n(no readable text extracted — the page may need JavaScript; only the snapshot was saved)"
+	}
+	if related := a.relatedNotes(res); related != "" {
+		text += "\n\nConnects to:\n" + related
+	}
+	reply(ctx, b, msg, text)
 }
 
 func (a *app) download(ctx context.Context, b *bot.Bot, fileID, dest string) error {

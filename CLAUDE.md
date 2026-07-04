@@ -142,11 +142,15 @@ Postgres (tsvector FTS + pgvector) → MCP tools over stdio.
   output captured (stdout is the MCP stream); failures logged, never
   fatal. `Env`'s `envGit` is detected once at startup.
 - `dross-bot/` — Go Telegram bot (`main.go` telegram wiring + capture,
-  `mcp.go` minimal MCP stdio client, `outbound.go` one-shot `send`,
-  `proposal.go` proposal announce/approve/reject). It is an MCP *client*:
+  `mcp.go` minimal MCP stdio client, `web.go` URL snapshotting,
+  `outbound.go` one-shot `send`, `proposal.go` proposal
+  announce/approve/reject). It is an MCP *client*:
   it spawns `dross-mcp` and routes text/forwards to `capture` (reply
   includes similar-notes nudges, best-effort) and photos/files to
-  `archive-document`, so the write policy stays server-side. Single shared
+  `archive-document`, so the write policy stays server-side. Messages
+  starting with a URL are snapshotted client-side (obelisk self-contained
+  HTML + readability-extracted text) and archived via `archive-document`
+  with an extra `inbox` tag, falling back to `capture` if the fetch fails. Single shared
   subprocess guarded by a mutex; restarted once on transport failure.
   Proposal callbacks run git in the notes repo; branch names are validated
   (`proposal/` prefix, slug charset, ≤56 chars) because callback data
