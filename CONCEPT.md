@@ -237,7 +237,7 @@ Roughly ordered by value:
   dross-mcp** — it spawns the server as a subprocess and speaks
   newline-delimited JSON-RPC over stdio, so every write goes through the
   decided write policy (atomic writes, IDs, indexing) instead of
-  reimplementing it in Go. Text/links/forwards → `capture` (forwards
+  reimplementing it in Go. Text/forwards → `capture` (forwards
   credit the origin in `:SOURCE:`); photos and files are downloaded and
   fed to `archive-document`, caption first line as title. Config is
   env-only: `TELEGRAM_TOKEN`, `DROSS_NOTES_DIR`, `DROSS_TELEGRAM_CHAT_ID`
@@ -251,4 +251,18 @@ Roughly ordered by value:
   **local file path** — URL fetching and text extraction are the client
   agent's job; extracted text is passed via the `text` parameter and
   indexed (see the extracted-text decision above).
+- URL capture: a message whose **first whitespace token is an http(s)
+  URL** is archived, not inboxed — the bot snapshots the page with
+  **obelisk** (one self-contained HTML file, resources inlined as data
+  URIs, JS stripped) and extracts title/plain text with **go-readability**
+  (deprecated upstream; migration target is
+  `codeberg.org/readeck/go-readability/v2`), then calls `archive-document`
+  with the snapshot, the URL as `:SOURCE:`, any trailing message text as
+  the body, extracted text for indexing, and an extra **`inbox`** tag
+  (`:literature:inbox:ATTACH:`) so inbox triage still surfaces it —
+  processing such a note means fleshing it out and dropping the `inbox`
+  tag. Fetch/archive failure (or a snapshot over 50 MB) falls back to
+  plain `capture`, so the URL is never lost; JS-rendered pages archive as
+  shells (the bot's reply says so). URL fetching stays the client's job —
+  the server is unchanged.
 
