@@ -239,7 +239,11 @@ Roughly ordered by value:
   decided write policy (atomic writes, IDs, indexing) instead of
   reimplementing it in Go. Text/forwards → `capture` (forwards
   credit the origin in `:SOURCE:`); photos and files are downloaded and
-  fed to `archive-document`, caption first line as title. Config is
+  fed to `archive-document`, caption first line as title. Every archive
+  (photo, file, or URL) is followed by a best-effort `capture` of an inbox
+  entry whose body links `[[id:...]]` to the fresh stub note — that entry
+  is the triage marker; processing it means fleshing out the linked note,
+  then deleting the entry. Config is
   env-only: `TELEGRAM_TOKEN`, `DROSS_NOTES_DIR`, `DROSS_TELEGRAM_CHAT_ID`
   (the allowlist; unset = refuse and reply with the sender's chat ID for
   first-time setup), optional `DROSS_MCP_BIN`.
@@ -260,9 +264,9 @@ Roughly ordered by value:
   (deprecated upstream; migration target is
   `codeberg.org/readeck/go-readability/v2`), then calls `archive-document`
   with the snapshot, the URL as `:SOURCE:`, any trailing message text as
-  the body, extracted text for indexing, and an extra **`inbox`** tag
-  (`:literature:inbox:ATTACH:`) so inbox triage still surfaces it —
-  processing such a note means fleshing it out and dropping the `inbox`
+  the body, and extracted text for indexing. The stub note is plain
+  `:literature:ATTACH:` — triage sees it via the inbox entry the bot
+  appends afterwards (see the bot-wiring decision above), not via an extra
   tag. Fetch/archive failure (or a snapshot over 50 MB) falls back to
   plain `capture`, so the URL is never lost; JS-rendered pages archive as
   shells (the bot's reply says so). URL fetching stays the client's job —
