@@ -32,6 +32,30 @@ proactive jobs (on a schedule) drive the same MCP tools, the bot is an MCP
 client of the same server, and Emacs edits the same files directly — the
 index catches up on the next tool call.
 
+## How the index stays fresh
+
+The index updates in two stages, and only one of them costs anything.
+There is no file watcher; freshness is pull-based, triggered by tool calls.
+
+- **Full-text chunks refresh on *every* tool call.** Each MCP call begins by
+  re-hashing the notes directory (SHA-256) and re-indexing only the files
+  whose content changed. So an edit from *anywhere* — Claude Code, the bot,
+  or plain Emacs — is picked up on the next tool call; the indexer can't
+  tell the sources apart, since all it sees is a file whose hash no longer
+  matches. This stage is pure Postgres and never hits the network.
+- **Embeddings refresh lazily, only when a semantic tool runs.** Vectors are
+  fetched from Voyage inside `semantic-search` and `similar-notes` only, and
+  only for chunks whose content is new — embeddings are keyed by content
+  hash, so unchanged notes are never re-embedded. Writes (`create-note`,
+  `update-note`, `capture`, …) update the chunks immediately but do *not*
+  embed at write time; the vector is filled in on the next semantic query.
+
+Practical upshot: the first `semantic-search` or `similar-notes` after a
+batch of edits pays to embed whatever changed (and blocks on that call);
+everything else — plain `search`, `backlinks`, `read-note`, and every
+write — never touches the embedding API. Without `VOYAGE_API_KEY` the two
+semantic tools are disabled and the rest is unaffected.
+
 ## Setup
 
 Prerequisites: GHC 9.12 + cabal, Go, Docker (for the index database),
