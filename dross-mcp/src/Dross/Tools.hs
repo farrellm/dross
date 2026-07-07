@@ -244,6 +244,27 @@ toolDefs =
           ]
       )
   , tool
+      "remove-entry"
+      "Delete an ID-bearing headline entry (and its whole subtree) from its file-level note -- e.g. clearing a processed inbox entry. Pass the entry's own :ID: and the parent file's hash from read-note; the id must be a headline, not a file-level note. Refuses if the file changed since it was read: on a conflict re-read and retry."
+      ( object
+          [ "type" .= t "object"
+          , "properties"
+              .= object
+                [ "id"
+                    .= object
+                      [ "type" .= t "string"
+                      , "description" .= t "The entry headline's own org :ID: property"
+                      ]
+                , "hash"
+                    .= object
+                      [ "type" .= t "string"
+                      , "description" .= t "Parent file's content hash from read-note"
+                      ]
+                ]
+          , "required" .= [t "id", t "hash"]
+          ]
+      )
+  , tool
       "append-note"
       "Append text to the end of a note's file, separated by a blank line. Only file-level notes. Refuses if the file changed since it was read: pass the hash from read-note, and on a conflict re-read and retry."
       ( object
@@ -530,6 +551,36 @@ callTool env name args = do
         if T.null (T.strip content)
           then Left "nothing to append: content is empty"
           else Right (appendBody old content)
+    -- Not routed through mutateNote: that harness is for file-level notes,
+    -- and remove-entry deliberately targets a headline node (and drops its ID).
+    "remove-entry" -> withParsed (\o -> (,) <$> o .: "id" <*> o .: "hash") $
+      \(nid, expected) ->
+        getNode (envDb env) nid >>= \case
+          Nothing -> pure (Left ("no note with ID " <> nid))
+          Just n
+            | nrLevel n == 0 ->
+                pure . Left $
+                  "note "
+                    <> nid
+                    <> " is a file-level note, not an entry; use update-note to edit it"
+            | otherwise -> do
+                bytes <- BS.readFile (nrFile n)
+                if sha256Hex bytes /= expected
+                  then
+                    pure . Left $
+                      "conflict: "
+                        <> T.pack (nrFile n)
+                        <> " changed since it was read; call read-note again and retry with the new hash"
+                  else case removeEntry (nrFile n) nid (TE.decodeUtf8Lenient bytes) of
+                    Left err -> pure (Left err)
+                    Right new -> do
+                      let newBytes = TE.encodeUtf8 new
+                      atomicWrite (nrFile n) newBytes
+                      commitMutation env ("dross: remove-entry: " <> nrTitle n) [nrFile n]
+                      refreshIndex (envDb env) (envNotesDir env)
+                      pure . Right $
+                        object
+                          ["id" .= nid, "file" .= nrFile n, "hash" .= sha256Hex newBytes]
     -- Deliberately not routed through mutateNote: capture is append-only
     -- and inserts fresh content without a prior read, so there is no stale
     -- read for the hash check to catch (recorded in CONCEPT.md Decisions).
@@ -716,6 +767,16 @@ checkedRewrite path old new = case parseDocument path new of
                   <> T.intercalate ", " lost
                   <> ". Keep their headlines (with :PROPERTIES: drawers) in the new content, or edit the file in Emacs."
               )
+
+-- | Delete an entry headline by ID, then guard the result: refuse if the
+-- rewrite would leave a file that no longer parses (the ID drop is the point,
+-- so no lost-ID check — unlike 'checkedRewrite').
+removeEntry :: FilePath -> Text -> Text -> Either Text Text
+removeEntry path nid old = do
+  new <- removeHeadlineById nid old
+  case parseDocument path new of
+    Left err -> Left ("rejected: removing the entry would leave a file that does not parse:\n" <> T.pack err)
+    Right _ -> Right new
 
 -- | Shared harness for the mutating tools: resolve the note, apply the
 -- check-then-refuse policy (file-level notes only; the file's current hash

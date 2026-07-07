@@ -41,7 +41,9 @@ proposed links) for approval before creating it and before removing
 anything from the inbox. Documents and URLs captured via the bot arrive as
 stub literature notes plus an inbox entry whose body links `[[id:...]]` to
 the stub — processing that entry means reviewing/fleshing out the linked
-literature note, then removing the entry like any other.
+literature note, then removing the entry like any other. Clear a processed
+entry with `remove-entry` (the entry's own `:ID:` plus the inbox file's hash
+from `read-note`) — never edit `inbox.org` directly.
 
 ### Link suggestion
 
