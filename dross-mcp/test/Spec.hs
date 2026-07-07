@@ -3,6 +3,7 @@
 module Main (main) where
 
 import Control.Monad (unless)
+import Data.Either (isLeft)
 import Data.IORef
 import Data.Map.Strict qualified as Map
 import Data.Maybe (listToMaybe)
@@ -164,6 +165,67 @@ main = do
     "appendBody"
     (T.stripEnd sample <> "\n\nAppended paragraph.\n")
     (appendBody sample "Appended paragraph.\n")
+
+  -- removeHeadlineById: drop an entry (and its subtree) by its own :ID:.
+  let inboxSample =
+        """
+        :PROPERTIES:
+        :ID: inbox-file
+        :END:
+        #+title: Inbox
+        #+filetags: :inbox:
+
+        * [2026-07-07] First
+        :PROPERTIES:
+        :ID: entry-1
+        :END:
+        Body one.
+
+        * [2026-07-07] Second
+        :PROPERTIES:
+        :ID: entry-2
+        :END:
+        Body two.
+        ** a child
+        some child text
+
+        * [2026-07-07] Third
+        :PROPERTIES:
+        :ID: entry-3
+        :END:
+        Body three.
+        """
+      nodeIdsOf out = either (const []) documentNodeIds (parseDocument "inbox.org" out)
+  case removeHeadlineById "entry-2" inboxSample of
+    Left err -> putStrLn ("removeHeadlineById middle: " <> T.unpack err) >> exitFailure
+    Right out -> do
+      -- Middle entry gone, file id and both siblings kept (result still parses).
+      check "removeHeadlineById keeps siblings" ["inbox-file", "entry-1", "entry-3"] (nodeIdsOf out)
+      -- Its child subtree goes with it.
+      check "removeHeadlineById drops child" False ("some child text" `T.isInfixOf` out)
+
+  -- Removing the last remaining entry leaves the metadata block, empty body.
+  let oneEntry =
+        """
+        :PROPERTIES:
+        :ID: only-file
+        :END:
+        #+title: Inbox
+        #+filetags: :inbox:
+
+        * an entry
+        :PROPERTIES:
+        :ID: only-entry
+        :END:
+        Body.
+        """
+  case removeHeadlineById "only-entry" oneEntry of
+    Left err -> putStrLn ("removeHeadlineById only: " <> T.unpack err) >> exitFailure
+    Right out -> check "removeHeadlineById to empty body" ["only-file"] (nodeIdsOf out)
+
+  -- An ID no headline carries is refused (and the file-level ID is not a headline).
+  check "removeHeadlineById unknown id" True (isLeft (removeHeadlineById "nope" inboxSample))
+  check "removeHeadlineById file id not a headline" True (isLeft (removeHeadlineById "inbox-file" inboxSample))
 
   -- A rendered capture parses back into one headline with its metadata.
   let cap =

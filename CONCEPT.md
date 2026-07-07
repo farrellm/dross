@@ -38,6 +38,7 @@ Lives in the `dross-mcp/` directory.
   - `semantic-search` — embedding similarity over notes and extracted document text
   - `similar-notes` — embedding-similar notes to a given note (link-suggestion candidates)
   - `read-note` / `create-note` / `append-note` / `update-note`
+  - `remove-entry` — delete an ID-bearing headline (e.g. a processed inbox entry)
   - `backlinks` / `forward-links` / `neighborhood` (n-hop link graph around a note)
   - `stale-notes` / `recent-notes` — least/most recently modified notes
     (gardening pool, digest raw material)
@@ -233,6 +234,13 @@ Roughly ordered by value:
 - `capture` is append-only and **exempt from the hash check** — it inserts
   fresh content without a prior read, so there is nothing to go stale. All
   other mutations keep check-then-refuse.
+- Entry removal is a **dedicated `remove-entry` tool**, not an `update-note`
+  flag: `update-note`'s ID-preservation guard (never silently orphan a note's
+  ID) stays strict, and deleting an ID-bearing headline — the inbox-clearing
+  case, where the entry *is* the ID-bearing headline — is an explicit, targeted
+  operation instead. It keeps the same check-then-refuse write policy (the
+  entry's own `:ID:` + the parent file's hash), so inbox processing never has
+  to fall back to a raw `inbox.org` edit.
 - Telegram bot wiring: the bot (`dross-bot/`) is an **MCP client of
   dross-mcp** — it spawns the server as a subprocess and speaks
   newline-delimited JSON-RPC over stdio, so every write goes through the

@@ -113,7 +113,7 @@ Postgres (tsvector FTS + pgvector) → MCP tools over stdio.
 - `src/Dross/Tools.hs` — tool schemas + implementations (`search`,
   `semantic-search`, `similar-notes`, `read-note`, `backlinks`,
   `forward-links`, `neighborhood`, `stale-notes`, `recent-notes`,
-  `create-note`, `update-note`, `append-note`, `capture`,
+  `create-note`, `update-note`, `append-note`, `remove-entry`, `capture`,
   `archive-document`).
   Tool results are JSON encoded into a single MCP text content block; tool
   failures return `isError: true` rather than JSON-RPC errors. Mutations
@@ -193,7 +193,10 @@ Postgres (tsvector FTS + pgvector) → MCP tools over stdio.
   NOTHING` (first file wins) — deliberate, not an oversight.
 - Tools that modify an existing note go through `mutateNote` in `Tools.hs`
   (hash check-then-refuse, atomic write, re-index) — don't write files
-  directly. Tools writing *fresh* content (`create-note`,
+  directly. `remove-entry` is the exception: it deletes an ID-bearing
+  *headline* (level != 0), the opposite of `mutateNote`'s file-level-only
+  guard, so it open-codes the same check-then-refuse harness. Tools writing
+  *fresh* content (`create-note`,
   `archive-document`, append-only `capture`) skip the hash but still use
   `atomicWrite` (see CONCEPT.md Decisions).
 - This machine has no passwordless sudo: for system packages, ask the user

@@ -10,9 +10,10 @@ module Dross.Org.Edit
   , setKeyword
   , renderFile
   , appendBody
+  , removeHeadlineById
   ) where
 
-import Data.Maybe (isJust)
+import Data.Maybe (isJust, listToMaybe)
 import Data.Text (Text)
 import Data.Text qualified as T
 
@@ -69,6 +70,53 @@ renderFile meta body =
 appendBody :: Text -> Text -> Text
 appendBody original content =
   T.stripEnd (normalize original) <> "\n\n" <> T.stripEnd content <> "\n"
+
+-- | Delete the headline whose own @:ID:@ property equals the target, along
+-- with its whole subtree (everything up to the next headline of the same or
+-- a shallower level). Returns 'Left' naming the ID if no headline carries it.
+-- The match is on a headline's *own* ID — the drawer beginning on the line
+-- immediately after it — so a descendant's ID never matches, and the
+-- file-level property drawer (which isn't under any headline) is never touched.
+removeHeadlineById :: Text -> Text -> Either Text Text
+removeHeadlineById target content =
+  case listToMaybe [(i, lvl) | (i, lvl) <- headlines, ownId (drop (i + 1) ls) == Just target] of
+    Nothing -> Left ("no headline with :ID: " <> target <> " in this note")
+    Just (i, lvl) ->
+      let end = case [j | (j, l) <- drop (i + 1) indexed, Just hl <- [headlineLevel l], hl <= lvl] of
+            (j : _) -> j
+            [] -> length ls
+          kept = take i ls <> drop end ls
+       in Right (tidy kept)
+  where
+    ls = T.lines (normalize content)
+    indexed = zip [0 ..] ls
+    headlines = [(i, lvl) | (i, l) <- indexed, Just lvl <- [headlineLevel l]]
+    -- Trailing blank lines stripped, single trailing newline, blank-line gap
+    -- left between former siblings collapsed — same seam behaviour as renderFile.
+    tidy kept = let out = T.stripEnd (T.unlines kept) in if T.null out then "" else out <> "\n"
+
+-- | A headline's level (count of leading @*@) when the stars are followed by a
+-- space — so @*bold*@ and @** @ without a title don't count. 'Nothing' otherwise.
+headlineLevel :: Text -> Maybe Int
+headlineLevel l =
+  let n = T.length (T.takeWhile (== '*') l)
+   in if n > 0 && T.take 1 (T.drop n l) == " " then Just n else Nothing
+
+-- | The @:ID:@ of the property drawer that begins on the head of these lines
+-- (the lines right after a headline). 'Nothing' if they don't open with a
+-- @:PROPERTIES:@ drawer, so a headline without its own drawer has no own ID.
+ownId :: [Text] -> Maybe Text
+ownId ls = case ls of
+  (l : more)
+    | isMarker ":PROPERTIES:" l ->
+        listToMaybe
+          [ T.strip v
+          | drawerLine <- takeWhile (not . isMarker ":END:") more
+          , Just v <- [T.stripPrefix ":ID:" (T.strip drawerLine)]
+          ]
+  _ -> Nothing
+  where
+    isMarker m x = T.toUpper (T.strip x) == m
 
 normalize :: Text -> Text
 normalize = T.replace "\r\n" "\n"
