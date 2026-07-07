@@ -69,6 +69,9 @@ definitions.
 Smoke test: pipe newline-delimited JSON-RPC into the binary (`initialize`,
 `tools/list`, `tools/call`), then inspect the index with `make db-psql` or
 `docker exec dross-db psql -U dross -d dross -c ...`.
+Rebuild the binary with `make mcp-build` first: `make mcp-test` relinks only
+the library + test suite, not the `dross-mcp` executable, so smoke-testing a
+source change straight after `mcp-test` drives a stale binary.
 No `jq` on this machine — extract fields from responses with `python3 -c`.
 Smoke-testing against a scratch notes dir repoints the shared index to it;
 that's safe (rebuildable cache) — the next run against real notes re-indexes.
