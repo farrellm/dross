@@ -1,3 +1,5 @@
+{-# LANGUAGE OverloadedStrings #-}
+
 -- | The Postgres index: connection handling, incremental re-indexing of the
 -- notes directory, and the queries behind the MCP tools.
 --
@@ -24,26 +26,19 @@ module Dross.Index
   , NodeRow (..)
   ) where
 
-import Control.Applicative ((<|>))
 import Control.Exception (try)
-import Control.Monad (forM, forM_, unless, when)
 import Crypto.Hash.SHA256 qualified as SHA256
-import Data.ByteString (ByteString)
 import Data.ByteString qualified as BS
 import Data.Map.Strict qualified as Map
-import Data.Maybe (fromMaybe)
 import Data.Set qualified as Set
-import Data.String (fromString)
-import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Text.Encoding qualified as TE
 import Data.Time (UTCTime)
 import Database.PostgreSQL.Simple
 import Database.PostgreSQL.Simple.Types (PGArray (..))
 import System.Directory (doesDirectoryExist, doesFileExist, getModificationTime, listDirectory)
-import System.Environment (lookupEnv)
 import System.FilePath (takeBaseName, takeExtension, (</>))
-import System.IO (hPutStrLn, stderr)
+import System.IO (hPutStrLn)
 
 import Dross.Chunk (chunkNode, defaultChunkChars)
 import Dross.Embed (renderVector)
@@ -443,7 +438,7 @@ collectNodes path doc = fileNode <> concatMap fromHeadline (docHeadlines doc)
         [ Node
             { nodeId = nid
             , nodeTitle =
-                fromMaybe (T.pack (takeBaseName path)) (documentTitle doc)
+                fromMaybe (toText (takeBaseName path)) (documentTitle doc)
             , nodeLevel = 0
             , nodeTodo = Nothing
             , nodeTags = docFiletags doc
@@ -510,7 +505,7 @@ listExtractFiles notesDir = do
             fmap concat . forM rests $ \rest -> do
               let p = preDir </> rest </> extractFileName
               ok <- doesFileExist p
-              pure [(p, T.pack (pre <> rest)) | ok]
+              pure [(p, toText (pre <> rest)) | ok]
 
 listOrgFiles :: FilePath -> IO [FilePath]
 listOrgFiles dir = do

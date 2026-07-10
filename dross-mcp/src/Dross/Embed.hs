@@ -1,3 +1,5 @@
+{-# LANGUAGE OverloadedStrings #-}
+
 -- | Voyage AI embeddings client: POST texts, get vectors. Kept behind a
 -- small interface (config + 'embedTexts') so swapping providers or moving
 -- to a local model later is a config change, per CONCEPT.md. All failures
@@ -12,9 +14,6 @@ module Dross.Embed
 
 import Control.Exception (try)
 import Data.Aeson
-import Data.List (sortOn)
-import Data.Maybe (fromMaybe)
-import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Text.Encoding qualified as TE
 import Data.Text.Encoding.Error qualified as TE
@@ -83,17 +82,17 @@ embedBatch cfg itype texts = do
           }
   r <- try (httpLbs req (embedManager cfg))
   pure $ case r of
-    Left (e :: HttpException) -> Left ("embedding request failed: " <> T.pack (show e))
+    Left (e :: HttpException) -> Left ("embedding request failed: " <> show e)
     Right resp
       | code < 200 || code >= 300 ->
           Left
             ( "embedding API returned HTTP "
-                <> T.pack (show code)
+                <> show code
                 <> ": "
                 <> bodySnippet (responseBody resp)
             )
       | otherwise -> case eitherDecode (responseBody resp) of
-          Left err -> Left ("could not parse embedding response: " <> T.pack err)
+          Left err -> Left ("could not parse embedding response: " <> toText err)
           Right (EmbedResponse items)
             | length items /= length texts ->
                 Left "embedding API returned an unexpected number of vectors"
@@ -135,4 +134,4 @@ instance FromJSON EmbedItem where
 -- | pgvector input literal: @[0.1,0.2,...]@ (accepts @show@'s scientific
 -- notation).
 renderVector :: [Float] -> Text
-renderVector v = "[" <> T.intercalate "," (map (T.pack . show) v) <> "]"
+renderVector v = "[" <> T.intercalate "," (map show v) <> "]"

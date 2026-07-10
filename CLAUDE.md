@@ -102,6 +102,9 @@ Postgres (tsvector FTS + pgvector) → MCP tools over stdio.
   loops can hang). Malformed drawers degrade to body text rather than
   failing the file. Richer org semantics are intentionally out of scope
   (that's Emacs's job) — don't grow the parser without checking CONCEPT.md.
+  The `import Prelude hiding (many)` is load-bearing: megaparsec's `many`
+  comes from parser-combinators and is a *different* entity from the
+  `Alternative` one relude re-exports, so both in scope is ambiguous.
 - `src/Dross/Index.hs` — everything Postgres. A "node" follows org-node
   semantics: the file-level entry (top property drawer `:ID:`) plus any
   headline with its own `:ID:`. Links are attributed to the *nearest
@@ -183,8 +186,35 @@ Postgres (tsvector FTS + pgvector) → MCP tools over stdio.
 
 ## Conventions
 
-- GHC2024 + `OverloadedStrings` project-wide (set in the cabal file); any
-  other extension goes in a per-file `LANGUAGE` pragma. Keep `-Wall` clean.
+- **relude is the prelude**, wired up by `mixins:` in the `common shared`
+  stanza of `dross-mcp.cabal` (not `NoImplicitPrelude` + `import Relude`) —
+  so don't add `import Relude` to modules. When a name clashes, hide
+  relude's with `import Prelude hiding (...)`, as `Org/Parser.hs` does for
+  megaparsec's `many`.
+- **Never import `Relude.Unsafe`** — it re-introduces the partial functions
+  (`head`, `fromJust`, `read`, `!!`) relude removed, and this codebase has
+  none. The `mixins` stanza doesn't expose it, so importing it is a compile
+  error; if you're tempted to widen the stanza, reach for the total version
+  instead (`viaNonEmpty head`, `fromMaybe`, `readMaybe`, `!!?`).
+  `Relude.Extra` *is* exposed and is fair game.
+- No `T.pack`. relude's `show` is `(Show a, IsString b) => a -> b`, so it
+  produces `Text` directly — write `show e`, not `T.pack (show e)`. For a
+  plain `String` (or `FilePath`), use `toText`. `T.unpack` still has its
+  uses; its relude counterpart is `toString`.
+- relude re-exports less than its docs suggest. It gives you `stdout`,
+  `stderr`, `hFlush`, `hSetBuffering`, `BufferMode`, `die`, `exitFailure`,
+  `getArgs`, `lookupEnv`, and the `IORef` API — but **not** `hPutStrLn`,
+  `isEOF`, `ExitCode`, or `try`, so those keep their explicit `System.IO` /
+  `System.Exit` / `Control.Exception` imports. Check the actual export list
+  before assuming.
+- GHC2024, set once in `common shared`, is the only language setting in the
+  cabal file. *Every* extension, `OverloadedStrings` included, goes in a
+  per-file `LANGUAGE` pragma. All library modules and the test suite carry
+  `OverloadedStrings`; `app/Main.hs` needs no extensions.
+- **Always fix compiler warnings.** `-Wall` is on for every stanza and the
+  tree is warning-clean; keep it that way. Under relude a redundant import
+  warning means the name now comes from the prelude — delete the import
+  rather than silence the warning.
 - Where-bound helpers that build aeson `Value`s need explicit type
   signatures, or string literals become ambiguous.
 - postgresql-simple `query_` results usually need a result-type annotation

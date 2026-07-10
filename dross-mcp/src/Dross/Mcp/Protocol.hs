@@ -1,3 +1,5 @@
+{-# LANGUAGE OverloadedStrings #-}
+
 -- | Minimal JSON-RPC 2.0 types for MCP over stdio. Only what the server
 -- needs: parse incoming requests, build result/error responses.
 module Dross.Mcp.Protocol
@@ -10,7 +12,6 @@ module Dross.Mcp.Protocol
   ) where
 
 import Data.Aeson
-import Data.Text (Text)
 
 data Request = Request
   { reqId :: Maybe Value

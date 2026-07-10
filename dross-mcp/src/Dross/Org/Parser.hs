@@ -1,4 +1,5 @@
 {-# LANGUAGE MultiWayIf #-}
+{-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE RecordWildCards #-}
 
 -- | Megaparsec parser for the org subset in "Dross.Org.Types".
@@ -12,15 +13,15 @@ module Dross.Org.Parser
   , extractLinks
   ) where
 
-import Control.Monad (guard, void)
-import Data.Bifunctor (first)
-import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
-import Data.Text (Text)
 import Data.Text qualified as T
-import Data.Void (Void)
 import Text.Megaparsec
 import Text.Megaparsec.Char
+
+-- Megaparsec's 'many' comes from parser-combinators, a distinct entity from the
+-- Alternative one relude re-exports; hide relude's so the unqualified megaparsec
+-- one resolves.
+import Prelude hiding (many)
 
 import Dross.Org.Types
 

@@ -1,10 +1,7 @@
 module Main (main) where
 
-import Control.Monad (unless)
 import System.Directory (doesDirectoryExist, makeAbsolute)
-import System.Environment (getArgs, lookupEnv)
-import System.Exit (die)
-import System.IO (hPutStrLn, stderr)
+import System.IO (hPutStrLn)
 
 import Data.Text qualified as T
 
@@ -38,7 +35,7 @@ main = do
       hPutStrLn stderr "dross-mcp: VOYAGE_API_KEY unset — semantic-search and similar-notes disabled"
       pure Nothing
     Just key -> do
-      cfg <- newEmbedConfig (T.pack key) (T.pack <$> modelOverride) urlOverride
+      cfg <- newEmbedConfig (toText key) (toText <$> modelOverride) urlOverride
       hPutStrLn stderr ("dross-mcp: embeddings enabled (" <> T.unpack (embedModel cfg) <> ")")
       pure (Just cfg)
   git <- isGitRepo dir'

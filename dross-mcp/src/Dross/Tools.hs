@@ -1,3 +1,5 @@
+{-# LANGUAGE OverloadedStrings #-}
+
 -- | Tool definitions and implementations for the MCP server, backed by the
 -- Postgres index. Every call starts with an incremental 'refreshIndex' so
 -- edits made in Emacs since the last call are visible without inotify.
@@ -9,17 +11,12 @@ module Dross.Tools
   , renderNote
   ) where
 
-import Control.Monad (filterM, when, zipWithM_)
 import Crypto.Hash.SHA256 qualified as SHA256
 import Data.Aeson
 import Data.Aeson.Types (Parser, parseEither)
-import Data.Bifunctor (first)
 import Data.Bits (shiftR, (.&.))
-import Data.ByteString (ByteString)
 import Data.ByteString qualified as BS
 import Data.Char (intToDigit, isAlphaNum, isSpace)
-import Data.Maybe (fromMaybe, isNothing)
-import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Text.Encoding qualified as TE
 import Data.Time (defaultTimeLocale, formatTime, getZonedTime)
@@ -569,7 +566,7 @@ callTool env name args = do
                   then
                     pure . Left $
                       "conflict: "
-                        <> T.pack (nrFile n)
+                        <> toText (nrFile n)
                         <> " changed since it was read; call read-note again and retry with the new hash"
                   else case removeEntry (nrFile n) nid (TE.decodeUtf8Lenient bytes) of
                     Left err -> pure (Left err)
@@ -590,7 +587,7 @@ callTool env name args = do
         Right () -> do
           nid <- UUID.toText <$> V4.nextRandom
           ts <-
-            T.pack . formatTime defaultTimeLocale "[%Y-%m-%d %a %H:%M]"
+            toText . formatTime defaultTimeLocale "[%Y-%m-%d %a %H:%M]"
               <$> getZonedTime
           let path = envNotesDir env </> "inbox.org"
           exists <- doesFileExist path
@@ -615,7 +612,7 @@ callTool env name args = do
         Right () -> do
           missing <- filterM (fmap not . doesFileExist) (path : extraPaths)
           case missing of
-            m : _ -> pure (Left ("no such file: " <> T.pack m))
+            m : _ -> pure (Left ("no such file: " <> toText m))
             [] -> do
               nid <- UUID.toText <$> V4.nextRandom
               let attachRel =
@@ -637,9 +634,9 @@ callTool env name args = do
               let link :: FilePath -> Text
                   link p =
                     "[[file:"
-                      <> T.pack (attachRel </> takeFileName p)
+                      <> toText (attachRel </> takeFileName p)
                       <> "]["
-                      <> T.pack (takeFileName p)
+                      <> toText (takeFileName p)
                       <> "]]"
                   links = T.intercalate "\n" (map link sources)
                   body = links <> (if T.null content then "" else "\n\n" <> content)
@@ -666,7 +663,7 @@ callTool env name args = do
     withParsed :: (Object -> Parser a) -> (a -> IO (Either Text Value)) -> IO (Either Text Value)
     withParsed p k =
       either (pure . Left) k $
-        first T.pack (parseEither (withObject "arguments" p) args)
+        first toText (parseEither (withObject "arguments" p) args)
     parseCreate o =
       (,,)
         <$> o .: "title"
@@ -755,7 +752,7 @@ renderCapture nid ts mtitle msource content =
 checkedRewrite :: FilePath -> Text -> Text -> Either Text Text
 checkedRewrite path old new = case parseDocument path new of
   Left err ->
-    Left ("rejected: the updated file would not parse:\n" <> T.pack err)
+    Left ("rejected: the updated file would not parse:\n" <> toText err)
   Right newDoc ->
     let oldIds = either (const []) documentNodeIds (parseDocument path old)
         lost = filter (`notElem` documentNodeIds newDoc) oldIds
@@ -775,7 +772,7 @@ removeEntry :: FilePath -> Text -> Text -> Either Text Text
 removeEntry path nid old = do
   new <- removeHeadlineById nid old
   case parseDocument path new of
-    Left err -> Left ("rejected: removing the entry would leave a file that does not parse:\n" <> T.pack err)
+    Left err -> Left ("rejected: removing the entry would leave a file that does not parse:\n" <> toText err)
     Right _ -> Right new
 
 -- | Shared harness for the mutating tools: resolve the note, apply the
@@ -800,7 +797,7 @@ mutateNote env tool nid expected edit =
             "note "
               <> nid
               <> " is a headline inside "
-              <> T.pack (nrFile n)
+              <> toText (nrFile n)
               <> "; only file-level notes can be modified"
       | otherwise -> do
           bytes <- BS.readFile (nrFile n)
@@ -808,7 +805,7 @@ mutateNote env tool nid expected edit =
             then
               pure . Left $
                 "conflict: "
-                  <> T.pack (nrFile n)
+                  <> toText (nrFile n)
                   <> " changed since it was read; call read-note again and retry with the new hash"
             else case edit (nrFile n) (TE.decodeUtf8Lenient bytes) of
               Left err -> pure (Left err)
@@ -836,7 +833,7 @@ atomicWrite path bytes = do
   renameFile tmp path
 
 sha256Hex :: ByteString -> Text
-sha256Hex = T.pack . BS.foldr step [] . SHA256.hash
+sha256Hex = toText . BS.foldr step [] . SHA256.hash
   where
     step b acc =
       intToDigit (fromIntegral (b `shiftR` 4))

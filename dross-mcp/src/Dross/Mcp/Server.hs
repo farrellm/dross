@@ -1,20 +1,18 @@
+{-# LANGUAGE OverloadedStrings #-}
+
 -- | MCP server over stdio: newline-delimited JSON-RPC 2.0 on stdin/stdout.
 -- Diagnostics go to stderr; stdout carries protocol messages only.
 module Dross.Mcp.Server
   ( runServer
   ) where
 
-import Control.Monad (unless)
 import Data.Aeson
 import Data.Aeson.Types (parseMaybe)
 import Data.ByteString qualified as BS
 import Data.ByteString.Char8 qualified as BS8
 import Data.ByteString.Lazy qualified as BSL
-import Data.Maybe (fromMaybe)
-import Data.Text (Text)
-import Data.Text qualified as T
 import Data.Text.Encoding qualified as TE
-import System.IO
+import System.IO (isEOF)
 
 import Dross.Mcp.Protocol
 import Dross.Tools
@@ -30,7 +28,7 @@ runServer env = do
         line <- BS8.getLine
         unless (BS.null line) $
           case eitherDecodeStrict line :: Either String Request of
-            Left err -> respond (mkError Null parseErrorCode (T.pack err))
+            Left err -> respond (mkError Null parseErrorCode (toText err))
             Right (Request Nothing _ _) -> pure () -- notification: no response
             Right (Request (Just rid) method params) ->
               respond =<< dispatch env rid method (fromMaybe Null params)

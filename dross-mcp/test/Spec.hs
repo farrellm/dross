@@ -1,15 +1,10 @@
 {-# LANGUAGE MultilineStrings #-}
+{-# LANGUAGE OverloadedStrings #-}
 
 module Main (main) where
 
-import Control.Monad (unless)
-import Data.Either (isLeft)
-import Data.IORef
 import Data.Map.Strict qualified as Map
-import Data.Maybe (listToMaybe)
-import Data.Text (Text)
 import Data.Text qualified as T
-import System.Exit
 
 import Dross.Chunk (chunkNode)
 import Dross.Embed (renderVector)
