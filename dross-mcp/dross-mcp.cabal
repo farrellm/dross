@@ -12,11 +12,22 @@ build-type:         Simple
 extra-doc-files:    CHANGELOG.md
 -- extra-source-files:
 
-common warnings
-    ghc-options: -Wall
+-- relude replaces the Prelude via mixins (its recommended wiring: no
+-- NoImplicitPrelude, no `import Relude` in modules). Only Relude and
+-- Relude.Extra are exposed -- Relude.Unsafe is deliberately left out, so
+-- importing it is a compile error rather than a rule to remember.
+common shared
+    ghc-options:      -Wall
+    build-depends:
+        base ^>=4.21.2.0,
+        relude ^>=1.2.2.2
+    mixins:
+        base hiding (Prelude),
+        relude (Relude as Prelude, Relude.Extra)
+    default-language: GHC2024
 
 library
-    import:           warnings
+    import:           shared
     hs-source-dirs:   src
     exposed-modules:
         Dross.Org.Types
@@ -30,7 +41,6 @@ library
         Dross.Mcp.Server
         Dross.Tools
     build-depends:
-        base ^>=4.21.2.0,
         aeson >=2.1,
         bytestring,
         containers,
@@ -46,31 +56,22 @@ library
         text >=2.0,
         time,
         uuid >=1.3
-    default-language: GHC2024
-    default-extensions:
-        OverloadedStrings
 
 executable dross-mcp
-    import:           warnings
+    import:           shared
     main-is:          Main.hs
     build-depends:
-        base ^>=4.21.2.0,
         directory,
         dross-mcp,
         text
     hs-source-dirs:   app
-    default-language: GHC2024
 
 test-suite dross-mcp-test
-    import:           warnings
+    import:           shared
     type:             exitcode-stdio-1.0
     main-is:          Spec.hs
     hs-source-dirs:   test
     build-depends:
-        base ^>=4.21.2.0,
         containers,
         dross-mcp,
         text
-    default-language: GHC2024
-    default-extensions:
-        OverloadedStrings

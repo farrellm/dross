@@ -1,3 +1,5 @@
+{-# LANGUAGE OverloadedStrings #-}
+
 -- | Git auto-commit for the notes repo (decided policy: every
 -- agent-initiated change is a commit — auditable, revertable, doubles as
 -- sync). All git output is captured so nothing leaks onto stdout (the MCP
@@ -9,10 +11,9 @@ module Dross.Git
   ) where
 
 import Control.Exception (IOException, try)
-import Data.Text (Text)
 import Data.Text qualified as T
 import System.Exit (ExitCode (..))
-import System.IO (hPutStrLn, stderr)
+import System.IO (hPutStrLn)
 import System.Process (proc, readCreateProcessWithExitCode)
 
 -- | Captured-output git call; Left holds a one-line diagnostic.
@@ -27,12 +28,12 @@ runGit dir args = do
     Right (ExitFailure c, out, err) ->
       Left ("git exited " <> show c <> ": " <> strip (err <> out))
   where
-    strip = T.unpack . T.strip . T.pack
+    strip = T.unpack . T.strip . toText
 
 -- | True when the directory lives inside a git work tree (and git exists).
 isGitRepo :: FilePath -> IO Bool
 isGitRepo dir =
-  either (const False) ((== "true") . T.strip . T.pack)
+  either (const False) ((== "true") . T.strip . toText)
     <$> runGit dir ["rev-parse", "--is-inside-work-tree"]
 
 -- | Stage and commit the given paths on the current branch. Only those

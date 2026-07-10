@@ -1,3 +1,5 @@
+{-# LANGUAGE OverloadedStrings #-}
+
 -- | AST for the org subset Dross indexes: headlines, property drawers,
 -- tags, file keywords, and links. Anything richer (agenda semantics,
 -- complex refiling) is out of scope for the server — that's what Emacs
@@ -14,9 +16,7 @@ module Dross.Org.Types
   , subtreeText
   ) where
 
-import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
-import Data.Text (Text)
 import Data.Text qualified as T
 
 data Document = Document

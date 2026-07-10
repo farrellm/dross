@@ -1,3 +1,5 @@
+{-# LANGUAGE OverloadedStrings #-}
+
 -- | Pure chunking of node text for embedding. A node arrives as its title
 -- plus the headline-level segments 'Dross.Index.collectNodes' assembles the
 -- body from; typical notes become a single chunk, long ones split at
@@ -10,7 +12,6 @@ module Dross.Chunk
   , defaultChunkChars
   ) where
 
-import Data.Text (Text)
 import Data.Text qualified as T
 
 -- | ~2K tokens; well under voyage-3.5's 32K-token context.

@@ -1,3 +1,5 @@
+{-# LANGUAGE OverloadedStrings #-}
+
 -- | Textual surgery on raw org file content, backing the mutating MCP
 -- tools. Works line-by-line on the original text (not the AST) so metadata
 -- the parser doesn't model still survives a rewrite verbatim.
@@ -13,8 +15,6 @@ module Dross.Org.Edit
   , removeHeadlineById
   ) where
 
-import Data.Maybe (isJust, listToMaybe)
-import Data.Text (Text)
 import Data.Text qualified as T
 
 import Dross.Org.Parser (parseKeyword)
