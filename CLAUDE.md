@@ -144,7 +144,11 @@ Postgres (tsvector FTS + pgvector) → MCP tools over stdio.
   hash-driven, like org files — into `doc_chunks` rows attributed to the
   literature note; deliberately *not* FK'd to `nodes` so they survive the
   note file's delete-and-reinsert re-index. `search`, `semantic-search`,
-  and `similar-notes` all union them in.
+  and `similar-notes` all union them in. Because the sweep is by directory
+  and not per-note bookkeeping, a document archived without text can be
+  repaired in place — `pdftotext file.pdf > .extract.txt` in its attach
+  dir, then any tool call picks it up. Never re-run `archive-document` to
+  fix this: that mints a duplicate note.
 - `src/Dross/Git.hs` — auto-commit (decided policy: every mutation is a
   commit). Commits only the touched paths on the current branch; all git
   output captured (stdout is the MCP stream); failures logged, never

@@ -45,6 +45,15 @@ literature note, then removing the entry like any other. Clear a processed
 entry with `remove-entry` (the entry's own `:ID:` plus the inbox file's hash
 from `read-note`) — never edit `inbox.org` directly.
 
+If triage folds a stub into an *existing* note instead of fleshing out the
+stub, the stub's attachments have to move with it. org-attach keys an attach
+dir to its note's `:ID:` (`data/<first 2>/<rest of the uuid>/`), and the
+indexer reads the owning note ID straight out of that path — delete the stub
+without moving its dir and the archived text belongs to nothing and drops out
+of `search`, silently. Moving it is a git operation, not an MCP one: `git mv`
+the dir onto the surviving note's ID, repoint the `[[file:...]]` link, keep
+the `ATTACH` filetag. Ask me first — it edits an existing note.
+
 ### Link suggestion
 
 After creating or substantially editing a note:
@@ -76,10 +85,20 @@ pass it as `archive-document`'s `text` parameter so the document is
 searchable; related files that belong on the same note (e.g. a paper's PDF
 next to its landing-page snapshot) go in `extra_paths`. (Web pages captured
 via the bot already arrive with a self-contained HTML snapshot attached and
-their readable text indexed; arxiv links additionally carry the paper's PDF
-with its full text indexed — drafting starts from that indexed text.) Then
-draft the literature note
-body: what the source is, its
-key claims in my words, notable quotes with locators (page/section), each
-on its own line so they can be cited individually. Run link suggestion
-against existing notes; propose permanent notes for ideas worth extracting.
+their readable text indexed; a PDF — linked directly, sent as a file, or
+pulled alongside an arxiv abstract page — arrives with its full text
+indexed. Drafting starts from that indexed text.)
+
+Confirm the text actually landed: `archive-document` returns an `extract`
+path, and a document that arrived without one — or a page whose extract is
+little more than its title — is archived but unsearchable, which won't
+announce itself later. It is repairable in place, since the indexer sweeps
+attach dirs for sidecars rather than tracking them per note: write the text
+to `.extract.txt` in the attach dir (`pdftotext file.pdf > .extract.txt`) and
+the next tool call picks it up. Don't re-run `archive-document` to fix
+it — that mints a duplicate note.
+
+Then draft the literature note body: what the source is, its key claims in my
+words, notable quotes with locators (page/section), each on its own line so
+they can be cited individually. Run link suggestion against existing notes;
+propose permanent notes for ideas worth extracting.

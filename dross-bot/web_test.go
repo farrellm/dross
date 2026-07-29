@@ -4,6 +4,9 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -72,6 +75,11 @@ func TestFetchPage(t *testing.T) {
 		w.Header().Set("Content-Type", "application/pdf")
 		_, _ = w.Write([]byte("%PDF-1.4 fake"))
 	})
+	// Deliberately mislabeled, the way real hosts serve papers.
+	mux.HandleFunc("/paper", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/octet-stream")
+		http.ServeFile(w, r, filepath.Join("testdata", "hello.pdf"))
+	})
 	srv := httptest.NewServer(mux)
 	defer srv.Close()
 
@@ -114,6 +122,33 @@ func TestFetchPage(t *testing.T) {
 		}
 	})
 
+	// Issue #8: a captured PDF used to reach archive-document with no text at
+	// all, so it was archived but never indexed. This walks archiveURL's chain
+	// — snapshot, save, extract — on a PDF the host mislabels as octet-stream.
+	t.Run("captured pdf is text-extracted", func(t *testing.T) {
+		if _, err := exec.LookPath("pdftotext"); err != nil {
+			t.Skip("pdftotext not installed")
+		}
+		page, err := fetchPage(context.Background(), srv.URL+"/paper")
+		if err != nil {
+			t.Fatalf("fetchPage: %v", err)
+		}
+		if page.text != "" {
+			t.Fatalf("readability should not have run on a PDF, got %q", page.text)
+		}
+		saved := filepath.Join(t.TempDir(), snapshotName(page.title, srv.URL+"/paper", page.contentType))
+		if err := os.WriteFile(saved, page.data, 0o644); err != nil {
+			t.Fatalf("saving snapshot: %v", err)
+		}
+		text, isPDF := archiveText(context.Background(), saved)
+		if !isPDF {
+			t.Error("isPDF = false: a mislabeled PDF must still be sniffed as one")
+		}
+		if !strings.Contains(text, "hello dross zettelkasten") {
+			t.Errorf("extracted text = %q, missing the PDF's prose", text)
+		}
+	})
+
 	t.Run("timeout honored", func(t *testing.T) {
 		slow := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			time.Sleep(2 * time.Second)
@@ -123,6 +158,56 @@ func TestFetchPage(t *testing.T) {
 		defer cancel()
 		if _, err := fetchPage(ctx, slow.URL); err == nil {
 			t.Error("expected timeout error, got nil")
+		}
+	})
+}
+
+func TestArchiveText(t *testing.T) {
+	dir := t.TempDir()
+	write := func(name, content string) string {
+		p := filepath.Join(dir, name)
+		if err := os.WriteFile(p, []byte(content), 0o644); err != nil {
+			t.Fatalf("writing %s: %v", name, err)
+		}
+		return p
+	}
+
+	t.Run("non-pdf is not sniffed as one", func(t *testing.T) {
+		// The .pdf name is deliberate: the magic number decides, not the name.
+		text, isPDF := archiveText(context.Background(), write("liar.pdf", "<html>not a pdf</html>"))
+		if isPDF || text != "" {
+			t.Errorf("archiveText = (%q, %v), want (\"\", false)", text, isPDF)
+		}
+	})
+
+	t.Run("missing file", func(t *testing.T) {
+		text, isPDF := archiveText(context.Background(), filepath.Join(dir, "absent.pdf"))
+		if isPDF || text != "" {
+			t.Errorf("archiveText = (%q, %v), want (\"\", false)", text, isPDF)
+		}
+	})
+
+	t.Run("broken pdf reports the attempt", func(t *testing.T) {
+		// isPDF stays true so the caller can warn rather than archive in silence.
+		text, isPDF := archiveText(context.Background(), write("broken.pdf", "%PDF-1.4 fake"))
+		if !isPDF {
+			t.Error("isPDF = false, want true: the PDF magic number should be recognized")
+		}
+		if text != "" {
+			t.Errorf("text = %q, want empty for an unreadable PDF", text)
+		}
+	})
+
+	t.Run("real pdf", func(t *testing.T) {
+		if _, err := exec.LookPath("pdftotext"); err != nil {
+			t.Skip("pdftotext not installed")
+		}
+		text, isPDF := archiveText(context.Background(), filepath.Join("testdata", "hello.pdf"))
+		if !isPDF {
+			t.Error("isPDF = false, want true")
+		}
+		if !strings.Contains(text, "hello dross zettelkasten") {
+			t.Errorf("text = %q, missing the fixture's prose", text)
 		}
 	})
 }
