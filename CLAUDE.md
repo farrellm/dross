@@ -53,11 +53,13 @@ go test ./...             # git-proposal + splitter tests always run; the MCP sm
 TELEGRAM_TOKEN=... DROSS_NOTES_DIR=~/notes DROSS_TELEGRAM_CHAT_ID=<id> ./dross-bot
 ./dross-bot send < msg.txt          # one-shot: deliver stdin to the chat
 ./dross-bot propose proposal/<slug> # one-shot: announce a proposal branch with Approve/Reject buttons
+./dross-bot reextract [--dry-run]   # one-shot: rewrite thin/missing .extract.txt sidecars in the attach tree
 ```
 
 The bot spawns `dross-mcp` (found on PATH, or `DROSS_MCP_BIN`) and calls
-its tools over stdio — it never writes org files itself (exception: the
-proposal buttons run `git merge` / `git branch -D` in the notes repo). With
+its tools over stdio — it never writes org files itself (exceptions: the
+proposal buttons run `git merge` / `git branch -D` in the notes repo, and
+`reextract` rewrites extract sidecars in place). With
 `DROSS_TELEGRAM_CHAT_ID` unset it refuses captures and replies with the
 sender's chat ID (first-time setup).
 
@@ -145,10 +147,12 @@ Postgres (tsvector FTS + pgvector) → MCP tools over stdio.
   literature note; deliberately *not* FK'd to `nodes` so they survive the
   note file's delete-and-reinsert re-index. `search`, `semantic-search`,
   and `similar-notes` all union them in. Because the sweep is by directory
-  and not per-note bookkeeping, a document archived without text can be
-  repaired in place — `pdftotext file.pdf > .extract.txt` in its attach
-  dir, then any tool call picks it up. Never re-run `archive-document` to
-  fix this: that mints a duplicate note.
+  and not per-note bookkeeping, a document archived without text — or with
+  a title-only one — can be repaired in place: `dross-bot reextract` sweeps
+  the tree and rewrites thin sidecars, or write one by hand
+  (`pdftotext file.pdf > .extract.txt` in its attach dir). Either way the
+  next tool call picks it up. Never re-run `archive-document` to fix this:
+  that mints a duplicate note.
 - `src/Dross/Git.hs` — auto-commit (decided policy: every mutation is a
   commit). Commits only the touched paths on the current branch; all git
   output captured (stdout is the MCP stream); failures logged, never
@@ -156,7 +160,8 @@ Postgres (tsvector FTS + pgvector) → MCP tools over stdio.
 - `dross-bot/` — Go Telegram bot (`main.go` telegram wiring + capture,
   `mcp.go` minimal MCP stdio client, `web.go` URL snapshotting,
   `outbound.go` one-shot `send`, `proposal.go` proposal
-  announce/approve/reject). It is an MCP *client*:
+  announce/approve/reject, `reextract.go` one-shot sidecar repair).
+  It is an MCP *client*:
   it spawns `dross-mcp` and routes text/forwards to `capture` (reply
   includes similar-notes nudges, best-effort) and photos/files to
   `archive-document`, so the write policy stays server-side. Every
@@ -165,7 +170,12 @@ Postgres (tsvector FTS + pgvector) → MCP tools over stdio.
   triage marker. Messages
   starting with a URL are snapshotted client-side (obelisk self-contained
   HTML + readability-extracted text) and archived via `archive-document`,
-  falling back to `capture` if the fetch fails.
+  falling back to `capture` if the fetch fails. When readability comes back
+  implausibly thin next to a raw text strip of the snapshot (`preferFallback`
+  in `web.go` — the failure mode is a title-only extract on markup it can't
+  read), the strip is indexed instead and the reply says so; that pollutes
+  the index with nav and comments, which is the accepted price of the page
+  being findable at all.
   Arxiv links (any of `/abs/`, `/pdf/`, `/html/`) are normalized: the abs
   page is snapshotted and the PDF attached via `extra_paths`, with
   pdftotext full text as the indexed `text` — PDF download and extraction
