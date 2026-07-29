@@ -284,6 +284,10 @@ func (a *app) archive(ctx context.Context, b *bot.Bot, msg *models.Message, file
 	if body != "" {
 		args["content"] = body
 	}
+	extracted, isPDF := archiveText(ctx, path)
+	if extracted != "" {
+		args["text"] = extracted
+	}
 	res, err := a.mcp.CallTool("archive-document", args)
 	if err != nil {
 		replyErr(ctx, b, msg, err)
@@ -293,8 +297,15 @@ func (a *app) archive(ctx context.Context, b *bot.Bot, msg *models.Message, file
 	if !a.addInboxEntry(res, title, source(msg)) {
 		text += "\n(couldn't add the inbox entry)"
 	}
+	if isPDF && extracted == "" {
+		text += pdfUnindexedNote
+	}
 	reply(ctx, b, msg, text)
 }
+
+// Warning for a PDF that archived fine but whose text extraction came up
+// empty: the attachment is saved, but nothing about it is searchable.
+const pdfUnindexedNote = "\n(no text extracted from the PDF — is pdftotext installed? the file was saved, but its contents aren't searchable)"
 
 // archiveURL snapshots a captured URL (self-contained HTML, images inlined)
 // and archives it as a literature note, plus an inbox entry pointing at it
@@ -347,6 +358,13 @@ func (a *app) archiveURL(ctx context.Context, b *bot.Bot, msg *models.Message, p
 		return
 	}
 
+	// A non-HTML root (a link straight to a paper) has no readability text;
+	// if it is a PDF, its own text is what should be indexed.
+	rootIsPDF := false
+	if page.text == "" {
+		page.text, rootIsPDF = archiveText(ctx, path)
+	}
+
 	src := pageURL
 	if from := source(msg); from != "telegram" {
 		src += " (via " + from + ")"
@@ -388,8 +406,13 @@ func (a *app) archiveURL(ctx context.Context, b *bot.Bot, msg *models.Message, p
 	if !a.addInboxEntry(res, title, src) {
 		text += "\n(couldn't add the inbox entry)"
 	}
-	if strings.HasPrefix(page.contentType, "text/html") && page.text == "" && args["text"] == nil {
-		text += "\n(no readable text extracted — the page may need JavaScript; only the snapshot was saved)"
+	if args["text"] == nil {
+		switch {
+		case strings.HasPrefix(page.contentType, "text/html"):
+			text += "\n(no readable text extracted — the page may need JavaScript; only the snapshot was saved)"
+		case rootIsPDF:
+			text += pdfUnindexedNote
+		}
 	}
 	if related := a.relatedNotes(res); related != "" {
 		text += "\n\nConnects to:\n" + related

@@ -10,9 +10,11 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"log"
 	"mime"
 	"net/http"
 	"net/url"
+	"os"
 	"os/exec"
 	"path"
 	"strings"
@@ -130,6 +132,32 @@ func pdfText(ctx context.Context, pdfPath string) (string, error) {
 		text = text[:maxExtractBytes]
 	}
 	return text, nil
+}
+
+// archiveText extracts indexable plain text from an already-saved archive
+// file. Today that means PDFs, sniffed by magic number because both the
+// content type and the filename routinely lie (hosts serve papers as
+// application/octet-stream; Telegram forwards keep whatever name the sender
+// gave them). Extraction stays best-effort — a missing pdftotext or a broken
+// PDF logs and yields "" — so isPDF reports whether it was even attempted,
+// letting the caller say so instead of archiving unindexed in silence.
+func archiveText(ctx context.Context, filePath string) (text string, isPDF bool) {
+	f, err := os.Open(filePath)
+	if err != nil {
+		return "", false
+	}
+	var magic [5]byte
+	_, rerr := io.ReadFull(f, magic[:])
+	f.Close()
+	if rerr != nil || string(magic[:]) != "%PDF-" {
+		return "", false
+	}
+	text, err = pdfText(ctx, filePath)
+	if err != nil {
+		log.Printf("pdftotext on %s skipped: %v", path.Base(filePath), err)
+		return "", true
+	}
+	return text, true
 }
 
 type webPage struct {
