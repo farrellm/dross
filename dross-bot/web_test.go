@@ -61,11 +61,24 @@ network forgets, and a local snapshot keeps the images alongside the words.</p>
 <img src="/img.png">
 </article></body></html>`
 
+// Issue #10: readability drops anything it judges invisible, so an article
+// buried in a hidden container comes back empty (or title-only) even though
+// the snapshot holds the whole thing — the same shape as LessWrong's markup
+// defeating it. The prose has to clear minFallbackBytes to be worth using.
+var hiddenArticle = `<html><head><title>Hidden Page</title></head><body>
+<div style="display:none"><h1>Hidden Page</h1><p>` +
+	strings.Repeat("The zettelkasten remembers what the network forgets. ", 60) +
+	`</p></div></body></html>`
+
 func TestFetchPage(t *testing.T) {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		_, _ = w.Write([]byte(testArticle))
+	})
+	mux.HandleFunc("/hidden", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		_, _ = w.Write([]byte(hiddenArticle))
 	})
 	mux.HandleFunc("/img.png", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "image/png")
@@ -97,12 +110,31 @@ func TestFetchPage(t *testing.T) {
 		if !strings.Contains(page.text, "link rot") {
 			t.Errorf("extracted text missing body prose: %q", page.text)
 		}
+		if page.textFallback {
+			t.Error("textFallback = true: a page readability handles must not fall back")
+		}
 		snap := string(page.data)
 		if !strings.Contains(snap, "data:image/png;base64") {
 			t.Error("snapshot does not inline the image as a data URI")
 		}
 		if strings.Contains(snap, `src="/img.png"`) {
 			t.Error("snapshot still references the remote image")
+		}
+	})
+
+	// Issue #10: a page whose extract collapsed used to be archived with a
+	// title-only sidecar, invisible to search while the snapshot held the
+	// article. The raw strip is the fallback.
+	t.Run("failed extraction falls back to raw text", func(t *testing.T) {
+		page, err := fetchPage(context.Background(), srv.URL+"/hidden")
+		if err != nil {
+			t.Fatalf("fetchPage: %v", err)
+		}
+		if !page.textFallback {
+			t.Errorf("textFallback = false, want true (readability text was %q)", page.text)
+		}
+		if !strings.Contains(page.text, "the network forgets") {
+			t.Errorf("fallback text missing the page's prose: %q", page.text)
 		}
 	})
 
@@ -160,6 +192,86 @@ func TestFetchPage(t *testing.T) {
 			t.Error("expected timeout error, got nil")
 		}
 	})
+}
+
+func TestHTMLText(t *testing.T) {
+	const doc = `<html><head><title>T</title>
+<style>body { color: red }</style>
+<script>var x = "scripts are not prose";</script>
+</head><body>
+<noscript>enable javascript</noscript>
+<h1>Heading</h1>
+<p>Prose   with
+collapsed   whitespace &amp; an entity.</p>
+<svg><text>vector label</text></svg>
+</body></html>`
+
+	got := htmlText([]byte(doc))
+	for _, want := range []string{"Heading", "Prose with collapsed whitespace & an entity."} {
+		if !strings.Contains(got, want) {
+			t.Errorf("htmlText missing %q, got %q", want, got)
+		}
+	}
+	for _, unwanted := range []string{"color: red", "scripts are not prose", "enable javascript", "vector label"} {
+		if strings.Contains(got, unwanted) {
+			t.Errorf("htmlText kept %q from a noise element: %q", unwanted, got)
+		}
+	}
+
+	t.Run("adjacent blocks stay separate words", func(t *testing.T) {
+		// Minified markup carries no whitespace between blocks; without a
+		// separator the two headings fuse into one unsearchable token.
+		got := htmlText([]byte(`<html><body><h1>Alpha</h1><h2>Beta</h2><p>Gamma<b>Delta</b></p></body></html>`))
+		if want := "Alpha Beta Gamma Delta"; got != want {
+			t.Errorf("htmlText = %q, want %q", got, want)
+		}
+	})
+
+	t.Run("capped", func(t *testing.T) {
+		huge := "<html><body><p>" + strings.Repeat("word ", maxExtractBytes) + "</p></body></html>"
+		if n := len(htmlText([]byte(huge))); n != maxExtractBytes {
+			t.Errorf("len = %d, want the %d-byte cap", n, maxExtractBytes)
+		}
+	})
+
+	t.Run("garbage yields nothing useful", func(t *testing.T) {
+		if got := htmlText([]byte{0xff, 0xfe, 0x00}); strings.Contains(got, "<") {
+			t.Errorf("htmlText on non-HTML bytes = %q", got)
+		}
+	})
+}
+
+func TestPreferFallback(t *testing.T) {
+	long := strings.Repeat("x", 40000)
+	cases := []struct {
+		name             string
+		extracted, strip string
+		want             bool
+	}{
+		// The case from issue #10: 60 chars of title against 38k of article.
+		{"title only", strings.Repeat("x", 60), strings.Repeat("x", 37914), true},
+		{"nothing extracted", "", strings.Repeat("x", 5000), true},
+		// A short post under a long comment thread: readability's clean text
+		// beats a strip full of comments.
+		{"short article, heavy page", strings.Repeat("x", 1500), long, false},
+		{"full article", strings.Repeat("x", 5000), long, false},
+		// Nothing worth falling back to.
+		{"strip is empty too", strings.Repeat("x", 60), strings.Repeat("x", 200), false},
+		{"both empty", "", "", false},
+		// Boundaries.
+		{"strip just under the floor", "", strings.Repeat("x", minFallbackBytes-1), false},
+		{"strip at the floor", "", strings.Repeat("x", minFallbackBytes), true},
+		{"ratio just short", strings.Repeat("x", 500), strings.Repeat("x", 2499), false},
+		{"ratio met", strings.Repeat("x", 500), strings.Repeat("x", 2500), true},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := preferFallback(c.extracted, c.strip); got != c.want {
+				t.Errorf("preferFallback(%d chars, %d chars) = %v, want %v",
+					len(c.extracted), len(c.strip), got, c.want)
+			}
+		})
+	}
 }
 
 func TestArchiveText(t *testing.T) {

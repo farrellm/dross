@@ -47,8 +47,10 @@ func main() {
 				log.Fatal("usage: dross-bot propose <proposal-branch>")
 			}
 			runPropose(os.Args[2])
+		case "reextract":
+			runReextract(os.Args[2:])
 		default:
-			log.Fatalf("unknown command %q (send, propose, or no arguments to serve)", os.Args[1])
+			log.Fatalf("unknown command %q (send, propose, reextract, or no arguments to serve)", os.Args[1])
 		}
 		return
 	}
@@ -307,16 +309,23 @@ func (a *app) archive(ctx context.Context, b *bot.Bot, msg *models.Message, file
 // empty: the attachment is saved, but nothing about it is searchable.
 const pdfUnindexedNote = "\n(no text extracted from the PDF — is pdftotext installed? the file was saved, but its contents aren't searchable)"
 
+// Warning for a page whose article extraction collapsed and was indexed from
+// a raw text strip instead: everything is searchable, but the indexed text
+// carries the page's chrome along with its prose.
+const rawTextNote = "\n(readability found no article — indexed the page's raw text, which may include navigation and comments)"
+
 // archiveURL snapshots a captured URL (self-contained HTML, images inlined)
 // and archives it as a literature note, plus an inbox entry pointing at it
 // so triage still sees it.
-// The message text after the URL becomes the note body; readability-extracted
-// text is indexed via archive-document's text parameter. A failed fetch falls
-// back to a plain inbox capture — the URL is never lost. Arxiv links of any
-// form (/abs/, /pdf/, /html/) are normalized: the abs page is snapshotted for
-// title/abstract, the PDF is downloaded alongside (best-effort) and its
-// pdftotext output replaces the abstract as the indexed text. All fetching
-// finishes before CallTool, so the MCP mutex is never held during network I/O.
+// The message text after the URL becomes the note body; the extracted text
+// (readability, or a raw strip when readability finds no article — the reply
+// says which) is indexed via archive-document's text parameter. A failed
+// fetch falls back to a plain inbox capture — the URL is never lost. Arxiv
+// links of any form (/abs/, /pdf/, /html/) are normalized: the abs page is
+// snapshotted for title/abstract, the PDF is downloaded alongside
+// (best-effort) and its pdftotext output replaces the abstract as the
+// indexed text. All fetching finishes before CallTool, so the MCP mutex is
+// never held during network I/O.
 func (a *app) archiveURL(ctx context.Context, b *bot.Bot, msg *models.Message, pageURL, body string) {
 	_, _ = b.SendChatAction(ctx, &bot.SendChatActionParams{
 		ChatID: msg.Chat.ID,
@@ -377,8 +386,10 @@ func (a *app) archiveURL(ctx context.Context, b *bot.Bot, msg *models.Message, p
 	if body != "" {
 		args["content"] = body
 	}
+	indexedFallback := false
 	if page.text != "" {
 		args["text"] = page.text
+		indexedFallback = page.textFallback
 	}
 
 	pdfNote := ""
@@ -391,6 +402,7 @@ func (a *app) archiveURL(ctx context.Context, b *bot.Bot, msg *models.Message, p
 			args["extra_paths"] = []string{pdfPath}
 			if pdfText != "" {
 				args["text"] = pdfText
+				indexedFallback = false // the paper's own text replaced the strip
 			}
 			pdfNote = "\n(PDF attached)"
 		}
@@ -406,13 +418,15 @@ func (a *app) archiveURL(ctx context.Context, b *bot.Bot, msg *models.Message, p
 	if !a.addInboxEntry(res, title, src) {
 		text += "\n(couldn't add the inbox entry)"
 	}
-	if args["text"] == nil {
-		switch {
-		case strings.HasPrefix(page.contentType, "text/html"):
-			text += "\n(no readable text extracted — the page may need JavaScript; only the snapshot was saved)"
-		case rootIsPDF:
-			text += pdfUnindexedNote
+	switch {
+	case args["text"] != nil:
+		if indexedFallback {
+			text += rawTextNote
 		}
+	case strings.HasPrefix(page.contentType, "text/html"):
+		text += "\n(no readable text extracted — the page may need JavaScript; only the snapshot was saved)"
+	case rootIsPDF:
+		text += pdfUnindexedNote
 	}
 	if related := a.relatedNotes(res); related != "" {
 		text += "\n\nConnects to:\n" + related

@@ -85,7 +85,9 @@ pass it as `archive-document`'s `text` parameter so the document is
 searchable; related files that belong on the same note (e.g. a paper's PDF
 next to its landing-page snapshot) go in `extra_paths`. (Web pages captured
 via the bot already arrive with a self-contained HTML snapshot attached and
-their readable text indexed; a PDF — linked directly, sent as a file, or
+their readable text indexed — or, on markup that defeats the extractor, a
+noisier raw strip of the page, which the capture reply flags; a PDF —
+linked directly, sent as a file, or
 pulled alongside an arxiv abstract page — arrives with its full text
 indexed. Drafting starts from that indexed text.)
 
@@ -93,10 +95,12 @@ Confirm the text actually landed: `archive-document` returns an `extract`
 path, and a document that arrived without one — or a page whose extract is
 little more than its title — is archived but unsearchable, which won't
 announce itself later. It is repairable in place, since the indexer sweeps
-attach dirs for sidecars rather than tracking them per note: write the text
-to `.extract.txt` in the attach dir (`pdftotext file.pdf > .extract.txt`) and
-the next tool call picks it up. Don't re-run `archive-document` to fix
-it — that mints a duplicate note.
+attach dirs for sidecars rather than tracking them per note: `dross-bot
+reextract` sweeps the whole tree and rewrites the thin ones (`--dry-run`
+first), or write the text to `.extract.txt` in the attach dir yourself
+(`pdftotext file.pdf > .extract.txt`). Either way the next tool call picks
+it up. Don't re-run `archive-document` to fix it — that mints a duplicate
+note.
 
 Then draft the literature note body: what the source is, its key claims in my
 words, notable quotes with locators (page/section), each on its own line so

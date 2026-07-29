@@ -2,7 +2,8 @@ package main
 
 // web.go: turn a captured URL into a self-contained page snapshot — obelisk
 // inlines every resource (images, CSS) as data URIs into one HTML file, and
-// go-readability extracts the article title and plain text for indexing.
+// go-readability extracts the article title and plain text for indexing —
+// with a raw text strip as the fallback for pages whose markup defeats it.
 // No Telegram or MCP imports here so the whole pipeline tests offline.
 
 import (
@@ -21,8 +22,10 @@ import (
 	"time"
 	"unicode"
 
+	"github.com/go-shiori/dom"
 	readability "github.com/go-shiori/go-readability"
 	"github.com/go-shiori/obelisk"
+	"golang.org/x/net/html"
 )
 
 const (
@@ -32,6 +35,18 @@ const (
 	maxSnapshotBytes = 50 << 20         // give up on absurd pages (every attachment is git-committed)
 	maxExtractBytes  = 2 << 20          // cap text fed to doc_chunks/embeddings
 	fetchUserAgent   = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36 dross-bot/0.1"
+)
+
+// Thresholds for falling back from readability to a raw text strip. Tuned to
+// fire only on outright extraction failure: the case that prompted them
+// yielded 60 chars of extract (just the page title) against 38k chars of
+// article. A short post under a long comment thread keeps readability's clean
+// text — the raw strip drags in nav and comments, so a merely thin extract is
+// not worth the index noise.
+const (
+	thinExtractBytes = 1000 // readability output below this may be title-only
+	minFallbackBytes = 2000 // the strip must yield real prose to be worth it
+	fallbackRatio    = 5    // ...and this many times what readability found
 )
 
 // splitURLMessage decides whether a message is a URL capture: its first
@@ -160,18 +175,97 @@ func archiveText(ctx context.Context, filePath string) (text string, isPDF bool)
 	return text, true
 }
 
+// htmlText returns a document's visible text with the noise elements that
+// carry no prose removed. Deliberately crude — it keeps nav, sidebars, and
+// comment threads, which is the price of getting the article at all when
+// readability cannot find it. Parsing rather than regex-stripping tags is
+// what decodes entities and survives the malformed markup that defeats
+// readability in the first place.
+func htmlText(data []byte) string {
+	doc, err := html.Parse(bytes.NewReader(data))
+	if err != nil {
+		return ""
+	}
+	dom.RemoveNodes(dom.QuerySelectorAll(doc, "script,style,noscript,svg,template"), nil)
+
+	// Every element boundary becomes whitespace. dom.TextContent would just
+	// concatenate, and minified markup carries no whitespace of its own, so
+	// the text of adjacent blocks fuses into unsearchable tokens
+	// ("...forgetsThe network...").
+	var b strings.Builder
+	var walk func(*html.Node)
+	walk = func(n *html.Node) {
+		if n.Type == html.TextNode {
+			b.WriteString(n.Data)
+			return
+		}
+		element := n.Type == html.ElementNode
+		if element {
+			b.WriteByte(' ')
+		}
+		for c := n.FirstChild; c != nil; c = c.NextSibling {
+			walk(c)
+		}
+		if element {
+			b.WriteByte(' ')
+		}
+	}
+	walk(doc)
+
+	text := strings.Join(strings.Fields(b.String()), " ")
+	if len(text) > maxExtractBytes {
+		text = text[:maxExtractBytes]
+	}
+	return text
+}
+
+// preferFallback decides whether readability's output is so much thinner
+// than the raw strip that it must be an extraction failure rather than a
+// short article. Empty extracted text satisfies it trivially, so a page
+// readability gives up on entirely also gets indexed.
+func preferFallback(extracted, strip string) bool {
+	return len(extracted) < thinExtractBytes &&
+		len(strip) >= minFallbackBytes &&
+		len(strip) >= fallbackRatio*len(extracted)
+}
+
+// extractHTML pulls the indexable title and text out of an HTML document,
+// falling back to htmlText when readability comes up implausibly empty.
+// base only resolves relative URLs for readability's scoring; text is what
+// callers want, so a placeholder is fine when the real URL isn't at hand.
+// The bool reports whether the fallback ran, so callers can say so.
+func extractHTML(data []byte, base *url.URL) (title, text string, fallback bool) {
+	if art, err := readability.FromReader(bytes.NewReader(data), base); err == nil {
+		title = strings.TrimSpace(art.Title)
+		text = strings.TrimSpace(art.TextContent)
+		if len(text) > maxExtractBytes {
+			text = text[:maxExtractBytes]
+		}
+	}
+	// Only parse a second time when readability's answer is thin enough to be
+	// suspect — the common case is a multi-megabyte snapshot it handled fine.
+	if len(text) < thinExtractBytes {
+		if strip := htmlText(data); preferFallback(text, strip) {
+			return title, strip, true
+		}
+	}
+	return title, text, false
+}
+
 type webPage struct {
-	data        []byte
-	contentType string
-	title       string // readability title; empty for non-HTML or extraction failure
-	text        string // readability plain text, capped at maxExtractBytes
+	data         []byte
+	contentType  string
+	title        string // readability title; empty for non-HTML or extraction failure
+	text         string // extracted plain text, capped at maxExtractBytes
+	textFallback bool   // text came from htmlText, not readability
 }
 
 // fetchPage archives pageURL into a single self-contained file. For HTML the
 // snapshot has all resources inlined and JS stripped (a snapshot is for
-// reading, not re-execution); readability then runs on the archived bytes —
-// best-effort, its failure keeps the snapshot with empty title/text. Non-HTML
-// roots (a direct PDF/image link) pass through as raw bytes.
+// reading, not re-execution); extractHTML then runs on the archived bytes —
+// best-effort, and when even the raw strip yields nothing the snapshot is
+// kept with empty title/text. Non-HTML roots (a direct PDF/image link) pass
+// through as raw bytes.
 func fetchPage(ctx context.Context, pageURL string) (*webPage, error) {
 	ctx, cancel := context.WithTimeout(ctx, fetchTimeout)
 	defer cancel()
@@ -199,13 +293,7 @@ func fetchPage(ctx context.Context, pageURL string) (*webPage, error) {
 	page := &webPage{data: data, contentType: contentType}
 	if strings.HasPrefix(contentType, "text/html") {
 		if u, uerr := url.Parse(pageURL); uerr == nil {
-			if art, rerr := readability.FromReader(bytes.NewReader(data), u); rerr == nil {
-				page.title = strings.TrimSpace(art.Title)
-				page.text = strings.TrimSpace(art.TextContent)
-				if len(page.text) > maxExtractBytes {
-					page.text = page.text[:maxExtractBytes]
-				}
-			}
+			page.title, page.text, page.textFallback = extractHTML(data, u)
 		}
 	}
 	return page, nil
