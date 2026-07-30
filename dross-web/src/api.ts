@@ -39,6 +39,8 @@ export type GraphNode = {
   id: string
   title: string | null
   file: string | null
+  /** Filetags, empty for a dangling target. What note kind is read from. */
+  tags?: string[]
   /** Hops from the root — present only for a neighborhood. */
   distance?: number
   /** Outline level — present only for the whole-collection graph. */

@@ -220,7 +220,11 @@ Postgres (tsvector FTS + pgvector) → MCP tools over stdio.
   design ties one thing together: the steel-tempering colour ramp
   (`src/temper.ts`) always means *distance from here* — hops in the graph,
   score in search, proximity in the drawer — so don't reach for it to
-  colour anything that isn't a distance. Graph rendering is canvas +
+  colour anything that isn't a distance. Note *kind* therefore rides a
+  second, independent channel: shape (`src/kind.ts`), where a square is a
+  literature note and a circle is everything else. Keep the two apart — a
+  kind never takes a colour, a distance never takes a shape. Graph
+  rendering is canvas +
   d3-force; note that canvas silently ignores `var(--x)` assigned to
   `fillStyle`/`font`, so colours must be resolved through
   `getComputedStyle` first.

@@ -249,9 +249,9 @@ neighborhood
   :: Connection
   -> Text
   -> Int
-  -> IO ([(Text, Maybe Text, Maybe FilePath, Int)], [(Text, Text, Maybe Text)])
+  -> IO ([(Text, Maybe Text, Maybe FilePath, Int, [Text])], [(Text, Text, Maybe Text)])
 neighborhood conn nid depth = do
-  nodes <-
+  rows <-
     query
       conn
       "WITH RECURSIVE hood(id, depth) AS (\
@@ -260,12 +260,16 @@ neighborhood conn nid depth = do
       \  SELECT CASE WHEN l.src = h.id THEN l.dst ELSE l.src END, h.depth + 1 \
       \  FROM links l JOIN hood h ON l.src = h.id OR l.dst = h.id \
       \  WHERE h.depth < ?) \
-      \SELECT h.id, n.title, n.file, min(h.depth)::int \
+      \SELECT h.id, n.title, n.file, min(h.depth)::int, \
+      \       coalesce(n.tags, '{}'::text[]) \
       \FROM hood h LEFT JOIN nodes n ON n.id = h.id \
-      \GROUP BY h.id, n.title, n.file \
+      \GROUP BY h.id, n.title, n.file, n.tags \
       \ORDER BY min(h.depth), n.title"
       (nid, depth)
-  let ids = PGArray [i | (i, _, _, _) <- nodes]
+  -- The coalesce keeps a dangling target's tags an empty list rather than
+  -- null, so callers get one shape for every node.
+  let nodes = [(i, title, file, d, fromPGArray tags) | (i, title, file, d, tags) <- rows]
+      ids = PGArray [i | (i, _, _, _, _) <- nodes]
   edges <-
     query
       conn
@@ -283,16 +287,17 @@ neighborhood conn nid depth = do
 wholeGraph
   :: Connection
   -> Maybe Text
-  -> IO ([(Text, Text, FilePath, Int)], [(Text, Text)])
+  -> IO ([(Text, Text, FilePath, Int, [Text])], [(Text, Text)])
 wholeGraph conn mtag = do
-  nodes <-
+  rows <-
     query
       conn
-      "SELECT id, title, file, level FROM nodes \
+      "SELECT id, title, file, level, tags FROM nodes \
       \WHERE (?::text IS NULL OR ? = ANY(tags)) \
       \ORDER BY title"
       (mtag, mtag)
-  let ids = PGArray [i | (i, _, _, _) <- nodes]
+  let nodes = [(i, title, file, level, fromPGArray tags) | (i, title, file, level, tags) <- rows]
+      ids = PGArray [i | (i, _, _, _, _) <- nodes]
   edges <-
     query
       conn
