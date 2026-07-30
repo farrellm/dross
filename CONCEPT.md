@@ -181,6 +181,11 @@ Roughly ordered by value:
   and identity; adding a bearer token would be a second, weaker copy of
   something already solved. This is the first listening socket in the
   system, so it stays behind that and read-only.
+- Reader visual channels are **one meaning each**: the temper ramp is
+  distance and only distance, so note kind takes shape instead — a square
+  for a literature note, a circle for everything else. The graph and
+  neighborhood tools emit each node's tags for it; the taxonomy stays in
+  the org files, and the reader reads only the one distinction it draws.
 - Web static files are served **from disk** (`DROSS_WEB_DIST`), not
   `go:embed`. There is no deployment story here — everything runs from the
   checkout — so embedding would buy nothing and cost a build-order
