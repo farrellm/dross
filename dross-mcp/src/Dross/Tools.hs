@@ -143,7 +143,7 @@ toolDefs =
       )
   , tool
       "neighborhood"
-      "The link graph around a note: every note within `depth` hops following links in either direction (with its hop distance from the root), plus the links among them. Dangling link targets have null title and file."
+      "The link graph around a note: every note within `depth` hops following links in either direction (with its hop distance from the root and its tags), plus the links among them. Dangling link targets have null title and file, and no tags."
       ( object
           [ "type" .= t "object"
           , "properties"
@@ -164,7 +164,7 @@ toolDefs =
       )
   , tool
       "graph"
-      "The whole link graph: every indexed note (with its outline level) and the links among them, optionally restricted to a tag. Use neighborhood instead to explore around one note -- this is for rendering or analysing the collection as a whole."
+      "The whole link graph: every indexed note (with its outline level and tags) and the links among them, optionally restricted to a tag. Use neighborhood instead to explore around one note -- this is for rendering or analysing the collection as a whole."
       ( object
           [ "type" .= t "object"
           , "properties"
@@ -523,8 +523,14 @@ callTool env name args = do
                 pure . Right $
                   object
                     [ "nodes"
-                        .= [ object ["id" .= i, "title" .= title, "file" .= file, "distance" .= d]
-                           | (i, title, file, d) <- ns
+                        .= [ object
+                              [ "id" .= i
+                              , "title" .= title
+                              , "file" .= file
+                              , "distance" .= d
+                              , "tags" .= tags
+                              ]
+                           | (i, title, file, d, tags) <- ns
                            ]
                     , "edges"
                         .= [ object ["from" .= s, "to" .= dst, "description" .= descr]
@@ -536,8 +542,14 @@ callTool env name args = do
       pure . Right $
         object
           [ "nodes"
-              .= [ object ["id" .= i, "title" .= title, "file" .= file, "level" .= level]
-                 | (i, title, file, level) <- ns
+              .= [ object
+                    [ "id" .= i
+                    , "title" .= title
+                    , "file" .= file
+                    , "level" .= level
+                    , "tags" .= tags
+                    ]
+                 | (i, title, file, level, tags) <- ns
                  ]
           , "edges" .= [object ["from" .= s, "to" .= dst] | (s, dst) <- es]
           ]
