@@ -252,6 +252,14 @@ a {
   border-radius: 50%;
 }
 
+/* A literature note's mark in the graph. Square rather than round, matched
+ * to the disc by area the way the canvas does it. */
+.pip-square {
+  width: 6px;
+  height: 6px;
+  border-radius: 0;
+}
+
 /* Note view --------------------------------------------------------------- */
 
 .note {

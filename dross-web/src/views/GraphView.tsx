@@ -16,10 +16,12 @@ import { api, type Graph } from '../api'
 import { useAsync } from '../useAsync'
 import { Empty, Failed, Loading } from '../components/bits'
 import { bandColor, hopBand } from '../temper'
+import { noteKind, type Kind } from '../kind'
 
 type Node = SimulationNodeDatum & {
   id: string
   label: string
+  kind: Kind
   distance: number | null
   dangling: boolean
 }
@@ -94,25 +96,42 @@ export function GraphView() {
         ) : (
           <>
             <Canvas graph={graph.value} focus={focus} />
-            <Legend focused={!!focus} />
+            <Legend
+              focused={!!focus}
+              sources={graph.value.nodes.some((n) => noteKind(n.tags) === 'literature')}
+            />
           </>
         ))}
     </div>
   )
 }
 
-function Legend({ focused }: { focused: boolean }) {
-  if (!focused) {
-    return <p className="legend">Tap a note to open it. Drag to pan, pinch to zoom.</p>
-  }
+function Legend({ focused, sources }: { focused: boolean; sources: boolean }) {
   return (
     <p className="legend">
-      {[1, 2, 3].map((d) => (
-        <span key={d} className="legend-item">
-          <span className="pip" style={{ background: bandColor(hopBand(d)) }} />
-          {d} hop{d > 1 ? 's' : ''}
-        </span>
-      ))}
+      {focused
+        ? [1, 2, 3].map((d) => (
+            <span key={d} className="legend-item">
+              <span className="pip" style={{ background: bandColor(hopBand(d)) }} />
+              {d} hop{d > 1 ? 's' : ''}
+            </span>
+          ))
+        : 'Tap a note to open it. Drag to pan, pinch to zoom.'}
+      {/* The kind key earns its line only when a source is on screen. Its
+          pips take a neutral, off the ramp: shape is the claim here, and a
+          band colour would read as a distance. */}
+      {sources && (
+        <>
+          <span className="legend-item">
+            <span className="pip pip-square" style={{ background: 'var(--ink-dim)' }} />
+            source
+          </span>
+          <span className="legend-item">
+            <span className="pip" style={{ background: 'var(--ink-dim)' }} />
+            note
+          </span>
+        </>
+      )}
     </p>
   )
 }
@@ -131,6 +150,7 @@ function Canvas({ graph, focus }: { graph: Graph; focus: string | null }) {
     const nodes: Node[] = graph.nodes.map((n) => ({
       id: n.id,
       label: n.title ?? 'untitled',
+      kind: noteKind(n.tags),
       distance: n.distance ?? null,
       dangling: n.title === null,
     }))
@@ -197,7 +217,9 @@ function Canvas({ graph, focus }: { graph: Graph; focus: string | null }) {
       // still has nodes you can see and hit.
       const r = (isFocus ? 9 : n.dangling ? 4 : 6) / view.current.k
       ctx.beginPath()
-      ctx.arc(n.x, n.y, r, 0, Math.PI * 2)
+      // A dangling target has no note behind it and so no kind: it keeps the
+      // circle, and the smaller radius is what marks it.
+      mark(ctx, n.dangling ? 'note' : n.kind, n.x, n.y, r)
       // With no root there is no distance to show, so the whole-collection
       // graph sits at the cold end of the ramp rather than on it.
       ctx.fillStyle = n.dangling
@@ -362,6 +384,20 @@ function fit(nodes: Node[], view: { x: number; y: number; k: number }, w: number
   view.k = k
   view.x = (-(minX + maxX) / 2) * k
   view.y = (-(minY + maxY) / 2) * k
+}
+
+/** Trace a node's mark on the current path: a square for a literature note,
+ *  a circle for everything else. Colour is the ramp's job, so shape is what
+ *  is left to say what kind of thing this is. The square is scaled to the
+ *  circle's area (side 2r·√π/2) rather than its diameter — matched by weight,
+ *  since radius here already means focus and dangling. */
+function mark(ctx: CanvasRenderingContext2D, kind: Kind, x: number, y: number, r: number) {
+  if (kind === 'literature') {
+    const half = r * 0.886
+    ctx.rect(x - half, y - half, half * 2, half * 2)
+  } else {
+    ctx.arc(x, y, r, 0, Math.PI * 2)
+  }
 }
 
 function truncate(label: string): string {
