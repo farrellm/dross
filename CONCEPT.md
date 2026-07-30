@@ -100,10 +100,12 @@ Implementation notes:
     hub notes) arrive as messages with inline buttons — approve / reject /
     open in Claude Code for discussion. Each proposal is staged on its own
     git branch; approve merges it, reject deletes it.
-- **React webapp** — deferred. Candidate uses if it ever earns its keep:
-  link-graph visualization, mobile *reading* (Telegram covers writing), and a
-  review-queue UI for approving agent proposals. Revisit after the Telegram
-  loop proves out.
+- **React webapp** (`dross-web/`) — the reading surface, on the phone.
+  Browse, read, search both ways, follow links, and see the link graph.
+  Deliberately **read-only**: Telegram covers capture, Claude Code covers
+  editing. Served by the bot's own HTTP server over the tailnet. The
+  review-queue idea stays unbuilt — proposals are answered with Telegram
+  buttons and discussed in Claude Code, which is enough.
 
 ## LLM augmentation
 
@@ -153,7 +155,9 @@ Roughly ordered by value:
 2. **Capture** — Telegram bot inbound → inbox; inbox-processing workflow.
 3. **Augment** — link suggestion, Q&A with citations, literature extraction.
 4. **Proactive** — scheduled digests, gardening, synthesis via Telegram.
-5. **Maybe** — webapp (graph view, review queue), multi-device beyond git.
+5. **Read** — web reader (`dross-web/`): notes, search, backlinks, graph,
+   on the phone over Tailscale.
+6. **Maybe** — multi-device beyond git.
 
 ## Decisions
 
@@ -164,6 +168,23 @@ Roughly ordered by value:
 - Telegram bot in **Go** (bot-library maturity, static-binary deployment).
 - **Single user.** No auth model beyond a Telegram chat-ID allowlist and a
   local-only MCP server; no per-user namespacing anywhere.
+- Web reader is **read-only**. Viewing needs no write policy, no hash
+  round-trip, and no mutation surface on a network port. Capture stays in
+  Telegram, editing stays in Claude Code.
+- Web backend lives **inside `dross-bot`** (`server.go`) rather than in a
+  fourth process: the bot is already an MCP client, so the reader is a
+  handful of routes onto tools it can already call. It gets its **own
+  dross-mcp subprocess** — `mcp.go` serializes calls behind one mutex, so a
+  shared client would let a page load stall a capture. Off unless
+  `DROSS_WEB_ADDR` is set.
+- Web perimeter is **Tailscale**, not the app. The tailnet does encryption
+  and identity; adding a bearer token would be a second, weaker copy of
+  something already solved. This is the first listening socket in the
+  system, so it stays behind that and read-only.
+- Web static files are served **from disk** (`DROSS_WEB_DIST`), not
+  `go:embed`. There is no deployment story here — everything runs from the
+  checkout — so embedding would buy nothing and cost a build-order
+  dependency between the Go and npm builds.
 - Index database: **PostgreSQL** — `tsvector` for full-text, **pgvector**
   for embeddings; a rebuildable cache, never the source of truth. Runs in
   **Docker** (`pgvector/pgvector` image), managed via the root `Makefile`.

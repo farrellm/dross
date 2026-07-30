@@ -23,7 +23,7 @@ import Data.Time (defaultTimeLocale, formatTime, getZonedTime)
 import Data.UUID qualified as UUID
 import Data.UUID.V4 qualified as V4
 import Database.PostgreSQL.Simple (Connection)
-import System.Directory (copyFile, createDirectoryIfMissing, doesFileExist, renameFile)
+import System.Directory (copyFile, createDirectoryIfMissing, doesFileExist, getModificationTime, renameFile)
 import System.FilePath (takeFileName, (<.>), (</>))
 
 import Dross.Embed (EmbedConfig (..), InputType (..), embedTexts)
@@ -90,7 +90,7 @@ toolDefs =
       )
   , tool
       "read-note"
-      "Read a note by its org ID. Returns title, tags, file path, content, and the file's content hash (pass it to update-note / append-note)."
+      "Read a note by its org ID. Returns title, tags, file path, content, last-modified time, and the file's content hash (pass it to update-note / append-note)."
       ( object
           [ "type" .= t "object"
           , "properties"
@@ -99,6 +99,11 @@ toolDefs =
                     .= object
                       [ "type" .= t "string"
                       , "description" .= t "The note's org :ID: property"
+                      ]
+                , "raw"
+                    .= object
+                      [ "type" .= t "boolean"
+                      , "description" .= t "Also return the file's raw org text as `raw` (default false). `content` is the indexed body, flattened for search: headline stars, TODO keywords, and drawers are gone. Ask for `raw` when the outline structure matters, e.g. to render the note."
                       ]
                 ]
           , "required" .= [t "id"]
@@ -155,6 +160,21 @@ toolDefs =
                       ]
                 ]
           , "required" .= [t "id"]
+          ]
+      )
+  , tool
+      "graph"
+      "The whole link graph: every indexed note (with its outline level) and the links among them, optionally restricted to a tag. Use neighborhood instead to explore around one note -- this is for rendering or analysing the collection as a whole."
+      ( object
+          [ "type" .= t "object"
+          , "properties"
+              .= object
+                [ "tag"
+                    .= object
+                      [ "type" .= t "string"
+                      , "description" .= t "Only notes carrying this tag, and the links among them (optional)"
+                      ]
+                ]
           ]
       )
   , tool
@@ -460,21 +480,25 @@ callTool env name args = do
                     ]
                 | (i, title, file, score, linked) <- rows
                 ]
-    "read-note" -> withParsed (.: "id") $ \nid ->
-      getNode (envDb env) nid >>= \case
-        Nothing -> pure (Left ("no note with ID " <> nid))
-        Just n -> do
-          bytes <- BS.readFile (nrFile n)
-          pure . Right $
-            object
-              [ "id" .= nrId n
-              , "title" .= nrTitle n
-              , "file" .= nrFile n
-              , "tags" .= nrTags n
-              , "todo" .= nrTodo n
-              , "content" .= nrBody n
-              , "hash" .= sha256Hex bytes
-              ]
+    "read-note" -> withParsed (\o -> (,) <$> o .: "id" <*> o .:? "raw" .!= False) $
+      \(nid, wantRaw) ->
+        getNode (envDb env) nid >>= \case
+          Nothing -> pure (Left ("no note with ID " <> nid))
+          Just n -> do
+            bytes <- BS.readFile (nrFile n)
+            mtime <- getModificationTime (nrFile n)
+            pure . Right $
+              object
+                [ "id" .= nrId n
+                , "title" .= nrTitle n
+                , "file" .= nrFile n
+                , "tags" .= nrTags n
+                , "todo" .= nrTodo n
+                , "content" .= nrBody n
+                , "raw" .= (if wantRaw then Just (TE.decodeUtf8 bytes) else Nothing)
+                , "mtime" .= mtime
+                , "hash" .= sha256Hex bytes
+                ]
     "backlinks" -> withParsed (.: "id") $ \nid -> do
       rows <- backlinks (envDb env) nid
       pure . Right . toJSON $
@@ -507,6 +531,16 @@ callTool env name args = do
                            | (s, dst, descr) <- es
                            ]
                     ]
+    "graph" -> withParsed (.:? "tag") $ \mtag -> do
+      (ns, es) <- wholeGraph (envDb env) mtag
+      pure . Right $
+        object
+          [ "nodes"
+              .= [ object ["id" .= i, "title" .= title, "file" .= file, "level" .= level]
+                 | (i, title, file, level) <- ns
+                 ]
+          , "edges" .= [object ["from" .= s, "to" .= dst] | (s, dst) <- es]
+          ]
     "stale-notes" -> withParsed (\o -> (,) <$> o .:? "tag" <*> o .:? "limit" .!= (10 :: Int)) $
       \(mtag, limit) -> do
         rows <- staleNotes (envDb env) mtag limit

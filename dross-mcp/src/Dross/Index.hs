@@ -18,6 +18,7 @@ module Dross.Index
   , backlinks
   , forwardLinks
   , neighborhood
+  , wholeGraph
   , embedPending
   , semanticSearch
   , similarNotes
@@ -269,6 +270,33 @@ neighborhood conn nid depth = do
     query
       conn
       "SELECT src, dst, descr FROM links \
+      \WHERE src = ANY(?) AND dst = ANY(?) ORDER BY src, dst"
+      (ids, ids)
+  pure (nodes, edges)
+
+-- | Every indexed node and the links among them, optionally restricted to a
+-- tag. The whole-collection counterpart to 'neighborhood': one pass over the
+-- tables instead of a recursive walk, which is what a full graph render
+-- wants (driving 'neighborhood' at a large depth revisits cycles instead).
+-- Edges are the induced subgraph — both endpoints are in the node list, so
+-- dangling links drop out and a tag filter stays self-consistent.
+wholeGraph
+  :: Connection
+  -> Maybe Text
+  -> IO ([(Text, Text, FilePath, Int)], [(Text, Text)])
+wholeGraph conn mtag = do
+  nodes <-
+    query
+      conn
+      "SELECT id, title, file, level FROM nodes \
+      \WHERE (?::text IS NULL OR ? = ANY(tags)) \
+      \ORDER BY title"
+      (mtag, mtag)
+  let ids = PGArray [i | (i, _, _, _) <- nodes]
+  edges <-
+    query
+      conn
+      "SELECT src, dst FROM links \
       \WHERE src = ANY(?) AND dst = ANY(?) ORDER BY src, dst"
       (ids, ids)
   pure (nodes, edges)

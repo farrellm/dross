@@ -1,9 +1,10 @@
 # Dross — single entry point for the whole repo (run from the root).
 #
-# `make` or `make help` lists every target. Three groups:
+# `make` or `make help` lists every target. Four groups:
 #   db-*   Postgres-in-Docker for the dross-mcp index
 #   mcp-*  build / test / run the Haskell MCP server
 #   bot-*  build / run the Go Telegram bot
+#   web-*  build / run the React reader (served by the bot)
 #
 # The dross-mcp server connects using DROSS_DB (libpq connection string); the
 # default baked into the binary matches this container:
@@ -21,11 +22,17 @@ PGDB      := dross
 DROSS_MCP_BIN ?= $(shell cd dross-mcp && cabal list-bin dross-mcp 2>/dev/null)
 export DROSS_MCP_BIN
 
+# The bot serves the reader off disk. Absolute, so it does not depend on the
+# working directory the bot was started from.
+DROSS_WEB_DIST ?= $(CURDIR)/dross-web/dist
+export DROSS_WEB_DIST
+
 .DEFAULT_GOAL := help
 
 .PHONY: help db-create db-start db-stop db-migrate db-psql db-destroy db-wait \
         mcp-build mcp-test mcp-run mcp-install mcp-watch \
-        bot-build bot-run bot-watch
+        bot-build bot-run bot-watch \
+        web-install web-build web-test web-dev web-serve
 
 ## list all targets
 help:
@@ -102,3 +109,23 @@ bot-run: bot-build
 ## live-reload dev loop via wgo (rebuild + restart on source change)
 bot-watch:
 	cd dross-bot && wgo run .
+
+## install the reader's npm dependencies (first time)
+web-install:
+	cd dross-web && npm install
+
+## build the reader into dross-web/dist (what the bot serves)
+web-build:
+	cd dross-web && npm run build
+
+## typecheck + run the org-renderer tests
+web-test:
+	cd dross-web && npm run typecheck && npm test
+
+## vite dev server with live reload, proxying /api to a running `web-serve`
+web-dev:
+	cd dross-web && npm run dev
+
+## serve the reader alone, without the Telegram bot (DROSS_WEB_ADDR or :8181)
+web-serve: bot-build
+	cd dross-bot && DROSS_WEB_ADDR=$${DROSS_WEB_ADDR:-:8181} ./dross-bot web

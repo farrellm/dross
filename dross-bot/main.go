@@ -8,7 +8,9 @@ package main
 // entry in the inbox so triage finds the stub note. Outbound: one-shot
 // `send` and `propose <branch>` modes for the scheduled proactive jobs
 // (../proactive/), and inline Approve/Reject buttons on proposals handled
-// here via git in the notes repo.
+// here via git in the notes repo. The read-only web reader (server.go)
+// rides along in the serving process when DROSS_WEB_ADDR is set, or runs
+// alone via `dross-bot web`.
 
 import (
 	"context"
@@ -49,8 +51,10 @@ func main() {
 			runPropose(os.Args[2])
 		case "reextract":
 			runReextract(os.Args[2:])
+		case "web":
+			runWeb()
 		default:
-			log.Fatalf("unknown command %q (send, propose, reextract, or no arguments to serve)", os.Args[1])
+			log.Fatalf("unknown command %q (send, propose, reextract, web, or no arguments to serve)", os.Args[1])
 		}
 		return
 	}
@@ -86,6 +90,10 @@ func serve() {
 
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer cancel()
+
+	// The web reader (server.go) rides along in this process, but on its own
+	// MCP subprocess. No-op unless DROSS_WEB_ADDR is set.
+	defer startWeb(ctx, mcpBin, notesDir)()
 
 	b, err := bot.New(token, bot.WithDefaultHandler(a.handle))
 	if err != nil {
