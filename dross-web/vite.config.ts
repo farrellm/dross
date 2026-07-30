@@ -8,6 +8,7 @@ const api = process.env.DROSS_WEB_API ?? 'http://127.0.0.1:8181'
 export default defineConfig({
   plugins: [react()],
   server: {
+    port: 5176,
     // Reachable from the phone over the tailnet, like the bot itself.
     host: true,
     proxy: { '/api': { target: api, changeOrigin: true } },
