@@ -1,0 +1,66 @@
+/* Tempered steel.
+ *
+ * When steel is heated its oxide layer runs through a fixed sequence of
+ * colours — straw, bronze, purple, blue, grey-blue — and a smith reads
+ * temperature straight off it. Here that ramp carries exactly one meaning,
+ * everywhere it appears: distance from where you are. Hops in the graph,
+ * relevance in search, proximity in the connections drawer. It is never
+ * decoration; if something is not a distance, it is not on the ramp.
+ */
+
+:root {
+  --ground: #14171a;
+  --panel: #1d2126;
+  --raise: #262c33;
+  --rule: #2e343b;
+  --ink: #e4e1da;
+  --ink-dim: #9aa1a8;
+  --ink-faint: #6b737b;
+
+  --t1: #e8c15c; /* straw   — 1 hop, strongest match */
+  --t2: #c77b3a; /* bronze  — 2 hops */
+  --t3: #8e5b8c; /* purple  — 3 hops */
+  --t4: #4c6fa8; /* blue    — 4 hops */
+  --t5: #6e8390; /* grey    — far, weak */
+
+  --mono: 'IBM Plex Mono', ui-monospace, SFMono-Regular, monospace;
+  --serif: 'Source Serif 4 Variable', 'Source Serif 4', Georgia, serif;
+  --sans: 'IBM Plex Sans Condensed', system-ui, sans-serif;
+
+  --fs-label: 0.6875rem; /* 11px — eyebrows, counts, the tab bar */
+  --fs-meta: 0.78125rem; /* 12.5px — dates, file paths */
+  --fs-ui: 0.9375rem; /* 15px */
+  --fs-body: 1.0625rem; /* 17px — note prose */
+  --fs-title: 1.25rem; /* 20px */
+  /* Titles here are whole declarative sentences, not labels, so display
+   * size is set for reading a sentence rather than for impact. */
+  --fs-display: 1.4375rem; /* 23px — the note's own title */
+
+  --gutter: 1.25rem;
+  --edge: 22px; /* width of the fore-edge tab */
+  --bar: 3rem; /* height of the bottom tab bar */
+
+  --lift: 0 -1px 0 rgb(0 0 0 / 40%), 0 8px 32px rgb(0 0 0 / 45%);
+}
+
+/* Light: polished steel rather than paper. The ramp keeps its hues and
+ * loses lightness, so the same variable means the same thing in both. */
+@media (prefers-color-scheme: light) {
+  :root {
+    --ground: #e3e3e0;
+    --panel: #f2f2ef;
+    --raise: #dcdcd8;
+    --rule: #c6c6c0;
+    --ink: #1a1d20;
+    --ink-dim: #5a6067;
+    --ink-faint: #82888e;
+
+    --t1: #8a6410;
+    --t2: #9a4e14;
+    --t3: #6b3e69;
+    --t4: #2e4f84;
+    --t5: #4a5a66;
+
+    --lift: 0 -1px 0 rgb(0 0 0 / 8%), 0 8px 32px rgb(0 0 0 / 18%);
+  }
+}
