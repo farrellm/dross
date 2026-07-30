@@ -6,8 +6,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Dross is an LLM-augmented Zettelkasten built on emacs org-node: plain org
 files hold the notes, a Haskell MCP server (`dross-mcp/`) exposes them as
-tools, and (later phases) a Go Telegram bot handles capture and proactive
-notifications. `CONCEPT.md` is the design document — its **Decisions**
+tools, a Go Telegram bot handles capture and proactive notifications, and
+a React reader (`dross-web/`) serves them to the phone. `CONCEPT.md` is the
+design document — its **Decisions**
 section records settled choices (megaparsec parsing, Postgres/pgvector via
 Docker, Voyage embeddings, git-branch proposal staging, single user).
 Consult it before making architectural changes, and record new decisions
@@ -16,7 +17,8 @@ there.
 ## Commands
 
 A single root `Makefile` drives the whole repo (`db-*` = Postgres/Docker
-index, `bot-*` = the Go bot); run these from the repo root:
+index, `bot-*` = the Go bot, `web-*` = the React reader); run these from the
+repo root:
 
 ```sh
 make              # or `make help`: list every target
@@ -36,6 +38,12 @@ make mcp-watch    # ghcid typecheck/reload loop
 make bot-build    # go build -o dross-bot
 make bot-run      # build + run (token/notes-dir from env/.envrc; DROSS_MCP_BIN auto-set to the cabal binary)
 make bot-watch    # live-reload dev loop via wgo
+
+make web-install  # first time: npm install in dross-web
+make web-build    # build dross-web/dist (what the bot serves)
+make web-test     # tsc --noEmit + vitest (the org renderer)
+make web-serve    # run the reader alone on :8181, no Telegram token needed
+make web-dev      # vite live-reload, proxying /api to a running web-serve
 ```
 
 MCP server, from `dross-mcp/` (the `mcp-*` targets above wrap these):
@@ -54,6 +62,7 @@ TELEGRAM_TOKEN=... DROSS_NOTES_DIR=~/notes DROSS_TELEGRAM_CHAT_ID=<id> ./dross-b
 ./dross-bot send < msg.txt          # one-shot: deliver stdin to the chat
 ./dross-bot propose proposal/<slug> # one-shot: announce a proposal branch with Approve/Reject buttons
 ./dross-bot reextract [--dry-run]   # one-shot: rewrite thin/missing .extract.txt sidecars in the attach tree
+DROSS_WEB_ADDR=:8181 ./dross-bot web  # one-shot: serve the reader without Telegram
 ```
 
 The bot spawns `dross-mcp` (found on PATH, or `DROSS_MCP_BIN`) and calls
@@ -74,6 +83,10 @@ Smoke test: pipe newline-delimited JSON-RPC into the binary (`initialize`,
 Rebuild the binary with `make mcp-build` first: `make mcp-test` relinks only
 the library + test suite, not the `dross-mcp` executable, so smoke-testing a
 source change straight after `mcp-test` drives a stale binary.
+The same trap one level out: the bot (and so the reader) spawns whatever
+`DROSS_MCP_BIN` points at — in `.envrc` that's `dross-mcp/bin/dross-mcp`,
+the `make mcp-install` symlink, *not* the cabal build output. After a server
+change, `make mcp-install` or the bot keeps serving the old tools.
 No `jq` on this machine — extract fields from responses with `python3 -c`.
 Smoke-testing against a scratch notes dir repoints the shared index to it;
 that's safe (rebuildable cache) — the next run against real notes re-indexes.
@@ -122,7 +135,13 @@ Postgres (tsvector FTS + pgvector) → MCP tools over stdio.
   `semantic-search`, `similar-notes`, `read-note`, `backlinks`,
   `forward-links`, `neighborhood`, `stale-notes`, `recent-notes`,
   `create-note`, `update-note`, `append-note`, `remove-entry`, `capture`,
-  `archive-document`).
+  `archive-document`, `graph`).
+  `read-note`'s `content` is the *indexed* body — `collectNodes` flattens it
+  for search, dropping headline stars, TODO keywords, and drawers — so
+  anything rendering an outline must pass `raw: true` and use that instead.
+  `graph` is the whole collection at once; `neighborhood` is the one to
+  reach for around a single note (its recursive CTE revisits cycles, so a
+  large `depth` is both expensive and not a substitute).
   Tool results are JSON encoded into a single MCP text content block; tool
   failures return `isError: true` rather than JSON-RPC errors. Mutations
   follow the decided write policy: atomic temp-file+rename writes and hash
@@ -160,7 +179,8 @@ Postgres (tsvector FTS + pgvector) → MCP tools over stdio.
 - `dross-bot/` — Go Telegram bot (`main.go` telegram wiring + capture,
   `mcp.go` minimal MCP stdio client, `web.go` URL snapshotting,
   `outbound.go` one-shot `send`, `proposal.go` proposal
-  announce/approve/reject, `reextract.go` one-shot sidecar repair).
+  announce/approve/reject, `reextract.go` one-shot sidecar repair,
+  `server.go` the reader's HTTP backend).
   It is an MCP *client*:
   it spawns `dross-mcp` and routes text/forwards to `capture` (reply
   includes similar-notes nudges, best-effort) and photos/files to
@@ -184,6 +204,26 @@ Postgres (tsvector FTS + pgvector) → MCP tools over stdio.
   Proposal callbacks run git in the notes repo; branch names are validated
   (`proposal/` prefix, slug charset, ≤56 chars) because callback data
   crosses the network.
+- `dross-bot/server.go` — the reader's read-only HTTP API, in the bot
+  process but on its **own** `dross-mcp` subprocess (`mcp.go` serializes
+  behind one mutex, so a shared client would let a page load stall a
+  capture). No listener unless `DROSS_WEB_ADDR` is set; `DROSS_WEB_DIST`
+  points at the built frontend (served from disk, SPA fallback). Routes are
+  thin proxies that pass the tool's JSON string straight through;
+  `/api/note/{id}` is the exception, bundling note + backlinks +
+  forward-links so one navigation costs one `refreshIndex` sweep instead of
+  three. `/api/attach` is the only path where a request touches the
+  filesystem — it resolves symlinks on both ends and checks containment.
+- `dross-web/` — React + Vite reader, phone-first, **read-only** (Telegram
+  captures, Claude Code edits). `src/org/` parses the same org subset the
+  server does and renders it; it consumes `raw`, never `content`. The
+  design ties one thing together: the steel-tempering colour ramp
+  (`src/temper.ts`) always means *distance from here* — hops in the graph,
+  score in search, proximity in the drawer — so don't reach for it to
+  colour anything that isn't a distance. Graph rendering is canvas +
+  d3-force; note that canvas silently ignores `var(--x)` assigned to
+  `fillStyle`/`font`, so colours must be resolved through
+  `getComputedStyle` first.
 - `proactive/` — stage-4 scheduled jobs: `run-job.sh` +
   `prompts/{digest,gardening,synthesis}.md`. Prompts are the job
   definitions; synthesis stages proposal branches via a temp git worktree

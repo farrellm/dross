@@ -22,8 +22,9 @@ settled choices.
 
 | Directory | What it is |
 |---|---|
-| `dross-mcp/` | Haskell MCP server: parses the notes, maintains a Postgres index (full-text + pgvector embeddings), and exposes the archive as tools — `search`, `semantic-search`, `similar-notes`, `read-note`, `backlinks`, `forward-links`, `neighborhood`, `stale-notes`, `recent-notes`, `create-note`, `update-note`, `append-note`, `capture`, `archive-document`. All writes are atomic, conflict-checked, and auto-committed to git. |
+| `dross-mcp/` | Haskell MCP server: parses the notes, maintains a Postgres index (full-text + pgvector embeddings), and exposes the archive as tools — `search`, `semantic-search`, `similar-notes`, `read-note`, `backlinks`, `forward-links`, `neighborhood`, `graph`, `stale-notes`, `recent-notes`, `create-note`, `update-note`, `append-note`, `capture`, `archive-document`. All writes are atomic, conflict-checked, and auto-committed to git. |
 | `dross-bot/` | Go Telegram bot. Inbound: text/links/forwards → inbox, photos/files → the document archive, with "connects to" nudges on capture. Outbound: one-shot `send` and `propose` modes for scheduled jobs, plus inline Approve/Reject buttons for agent proposals. |
+| `dross-web/` | React reader for the phone: browse and read notes, search by words or by meaning, open a note's backlinks from an always-visible edge tab, and walk the link graph. Read-only by design — Telegram captures, Claude Code edits. Served by `dross-bot` over your tailnet. |
 | `proactive/` | Scheduled agent jobs (cron + headless `claude -p`): weekly digest, gardening (resurfaced stale notes, duplicate flags), synthesis (drafted hub notes staged as git proposals). |
 | `docs/notes-CLAUDE.md` | Template CLAUDE.md for your *notes* repository — teaches the agent Zettelkasten discipline and the workflows (inbox processing, link suggestion, Q&A with citations, literature notes). |
 
@@ -102,6 +103,18 @@ finds `dross-mcp` on `PATH`, or set `DROSS_MCP_BIN`.
 lines. `proactive/run-job.sh digest` (or `gardening`, `synthesis`) runs one
 by hand.
 
+**6. Web reader** (optional, for reading on your phone):
+
+```sh
+make web-install && make web-build
+DROSS_WEB_ADDR=:8181 make bot-run     # or `make web-serve` without the bot
+```
+
+Open `http://<this machine>:8181` from your phone. There is no login: the
+reader is read-only and expects to be reached over a private network —
+[Tailscale](https://tailscale.com) is what this is built for. Don't put it
+on the open internet.
+
 ## Everyday use
 
 - **Capture anywhere**: text a thought to the bot, or ask Claude Code to
@@ -127,10 +140,13 @@ by hand.
 ```sh
 make mcp-build && make mcp-test
 make bot-build && (cd dross-bot && go vet ./... && go test ./...)
+make web-test
 ```
 
 `make bot-watch` runs a [wgo](https://github.com/bokwoon95/wgo)
-live-reload loop for the bot (rebuild + restart on source change).
+live-reload loop for the bot (rebuild + restart on source change). For the
+reader, run `make web-serve` in one shell and `make web-dev` in another:
+Vite serves the UI with live reload and proxies `/api` to the backend.
 
 `dross-mcp/README.md` has the server details (schema, environment
 variables, smoke-testing); `CLAUDE.md` orients coding agents working on
