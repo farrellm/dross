@@ -17,6 +17,7 @@ import { useAsync } from '../useAsync'
 import { Empty, Failed, Loading } from '../components/bits'
 import { bandColor, hopBand } from '../temper'
 import { noteKind, type Kind } from '../kind'
+import { clamp, toWorld, zoomAbout, MIN_K } from '../viewport'
 
 type Node = SimulationNodeDatum & {
   id: string
@@ -283,13 +284,39 @@ function Canvas({ graph, focus }: { graph: Graph; focus: string | null }) {
   const gesture = useRef({
     pointers: new Map<number, { x: number; y: number }>(),
     moved: 0,
-    pinch: 0,
+    // Span and midpoint of the two fingers, or null when fewer than two are
+    // down. The midpoint is what a pinch zooms about, so it has to be
+    // remembered frame to frame alongside the span.
+    pinch: null as null | { span: number; x: number; y: number },
   })
+
+  /** Where the fingers are, in the canvas-centre-relative pixels the view
+   *  transform speaks (see viewport.ts). Null with fewer than two down. */
+  const pinchState = (canvas: HTMLCanvasElement) => {
+    const [a, b] = [...gesture.current.pointers.values()]
+    if (!a || !b) return null
+    const rect = canvas.getBoundingClientRect()
+    return {
+      span: Math.hypot(a.x - b.x, a.y - b.y),
+      x: (a.x + b.x) / 2 - rect.left - rect.width / 2,
+      y: (a.y + b.y) / 2 - rect.top - rect.height / 2,
+    }
+  }
+
+  /** Cursor position in the same frame, for wheel zoom. */
+  const focalPoint = (canvas: HTMLCanvasElement, clientX: number, clientY: number) => {
+    const rect = canvas.getBoundingClientRect()
+    return { x: clientX - rect.left - rect.width / 2, y: clientY - rect.top - rect.height / 2 }
+  }
 
   const onDown = (e: React.PointerEvent<HTMLCanvasElement>) => {
     e.currentTarget.setPointerCapture(e.pointerId)
     gesture.current.pointers.set(e.pointerId, { x: e.clientX, y: e.clientY })
     gesture.current.moved = 0
+    // Seed on the way in, so the first two-finger move already zooms.
+    if (gesture.current.pointers.size >= 2) {
+      gesture.current.pinch = pinchState(e.currentTarget)
+    }
   }
 
   const onMove = (e: React.PointerEvent<HTMLCanvasElement>) => {
@@ -299,14 +326,15 @@ function Canvas({ graph, focus }: { graph: Graph; focus: string | null }) {
     g.pointers.set(e.pointerId, { x: e.clientX, y: e.clientY })
 
     autoFit.current = false
-    const points = [...g.pointers.values()]
-    if (points.length >= 2) {
-      const [a, b] = points as [{ x: number; y: number }, { x: number; y: number }]
-      const span = Math.hypot(a.x - b.x, a.y - b.y)
-      if (g.pinch > 0) {
-        view.current.k = clamp(view.current.k * (span / g.pinch), 0.2, 4)
+    if (g.pointers.size >= 2) {
+      const next = pinchState(e.currentTarget)
+      // Zooming about the midpoint, and following the midpoint as it slides,
+      // is one call: a pinch that drifts pans as well, which is what the hand
+      // expects it to do.
+      if (next && g.pinch && g.pinch.span > 0 && next.span > 0) {
+        zoomAbout(view.current, g.pinch, next, next.span / g.pinch.span)
       }
-      g.pinch = span
+      g.pinch = next
       g.moved += TAP_SLOP + 1
     } else {
       view.current.x += e.clientX - prev.x
@@ -319,15 +347,14 @@ function Canvas({ graph, focus }: { graph: Graph; focus: string | null }) {
   const onUp = (e: React.PointerEvent<HTMLCanvasElement>) => {
     const g = gesture.current
     g.pointers.delete(e.pointerId)
-    if (g.pointers.size < 2) g.pinch = 0
+    // Re-seed rather than blank: lifting one of three fingers should carry on
+    // pinching with the two that remain.
+    g.pinch = g.pointers.size >= 2 ? pinchState(e.currentTarget) : null
     if (g.moved > TAP_SLOP) return
 
     const canvas = e.currentTarget
-    const rect = canvas.getBoundingClientRect()
-    const x =
-      (e.clientX - rect.left - view.current.x - rect.width / 2) / view.current.k
-    const y =
-      (e.clientY - rect.top - view.current.y - rect.height / 2) / view.current.k
+    const focal = focalPoint(canvas, e.clientX, e.clientY)
+    const { x, y } = toWorld(view.current, focal.x, focal.y)
 
     let best: Node | null = null
     let bestDistance = HIT_RADIUS / view.current.k
@@ -352,7 +379,9 @@ function Canvas({ graph, focus }: { graph: Graph; focus: string | null }) {
       onPointerCancel={onUp}
       onWheel={(e) => {
         autoFit.current = false
-        view.current.k = clamp(view.current.k * (e.deltaY < 0 ? 1.1 : 0.9), 0.2, 4)
+        // Zoom about the cursor, as the pinch does about the fingers.
+        const focal = focalPoint(e.currentTarget, e.clientX, e.clientY)
+        zoomAbout(view.current, focal, focal, e.deltaY < 0 ? 1.1 : 0.9)
         draw()
       }}
     />
@@ -378,7 +407,7 @@ function fit(nodes: Node[], view: { x: number; y: number; k: number }, w: number
   const margin = 48 // room for the labels hanging below each node
   const k = clamp(
     Math.min((w - margin) / Math.max(maxX - minX, 1), (h - margin) / Math.max(maxY - minY, 1)),
-    0.2,
+    MIN_K,
     1.6,
   )
   view.k = k
@@ -402,8 +431,4 @@ function mark(ctx: CanvasRenderingContext2D, kind: Kind, x: number, y: number, r
 
 function truncate(label: string): string {
   return label.length > 22 ? label.slice(0, 21) + '…' : label
-}
-
-function clamp(n: number, lo: number, hi: number): number {
-  return Math.min(Math.max(n, lo), hi)
 }
