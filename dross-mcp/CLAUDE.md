@@ -51,18 +51,19 @@ overview, the build/run commands, and the smoke-test procedure.
   tool touches the network, and a missing key just disables those two
   tools. Embeddings are keyed by `(content_sha256, model)`, not chunk id,
   so they survive re-indexing; only changed content is re-embedded.
-  Archived-document extracted text (`archive-document`'s `text` parameter)
-  lives in a `.extract.txt` sidecar in the attach dir and is swept —
-  hash-driven, like org files — into `doc_chunks` rows attributed to the
-  literature note; deliberately *not* FK'd to `nodes` so they survive the
-  note file's delete-and-reinsert re-index. `search`, `semantic-search`,
-  and `similar-notes` all union them in. Because the sweep is by directory
-  and not per-note bookkeeping, a document archived without text — or with
-  a title-only one — can be repaired in place: `dross-bot reextract` sweeps
-  the tree and rewrites thin sidecars, or write one by hand
-  (`pdftotext file.pdf > .extract.txt` in its attach dir). Either way the
-  next tool call picks it up. Never re-run `archive-document` to fix this:
-  that mints a duplicate note.
+- Archived-document text — `src/Dross/Index.hs` indexes it on a path of its
+  own, separate from org files. The extracted text (`archive-document`'s
+  `text` parameter) lives in a `.extract.txt` sidecar in the attach dir,
+  swept — hash-driven, like org files — into `doc_chunks` rows attributed
+  to the literature note; deliberately *not* FK'd to `nodes` so they
+  survive the note file's delete-and-reinsert re-index. `search`,
+  `semantic-search`, and `similar-notes` all union them in.
+  Because the sweep is by directory and not per-note bookkeeping, a
+  document archived without text — or with a title-only one — can be
+  repaired in place: `dross-bot reextract` sweeps the tree and rewrites
+  thin sidecars, or write one by hand (`pdftotext file.pdf > .extract.txt`
+  in its attach dir). Either way the next tool call picks it up. Never
+  re-run `archive-document` to fix this: that mints a duplicate note.
 - `src/Dross/Git.hs` — auto-commit (decided policy: every mutation is a
   commit). Commits only the touched paths on the current branch; all git
   output captured (stdout is the MCP stream); failures logged, never
