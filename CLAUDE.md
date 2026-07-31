@@ -1,7 +1,5 @@
 # CLAUDE.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
-
 ## Project
 
 Dross is an LLM-augmented Zettelkasten built on emacs org-node: plain org
@@ -14,49 +12,24 @@ Docker, Voyage embeddings, git-branch proposal staging, single user).
 Consult it before making architectural changes, and record new decisions
 there.
 
+Per-subdirectory guidance lives in its own CLAUDE.md, loaded when you work
+there: `dross-mcp/` (parser, index, tools, and the Haskell/relude
+conventions), `dross-bot/`, `dross-web/`, `proactive/`.
+
 ## Commands
 
 A single root `Makefile` drives the whole repo (`db-*` = Postgres/Docker
-index, `bot-*` = the Go bot, `web-*` = the React reader); run these from the
-repo root:
+index, `bot-*` = the Go bot, `web-*` = the React reader); run `make help`
+from the repo root for the full list. Note that `make db-migrate`
+(re-applying `db/schema.sql`) is the *only* migration mechanism.
 
-```sh
-make              # or `make help`: list every target
-
-make db-create    # first time: pgvector/pgvector container + volume + migration
-make db-start     # after reboot/db-stop
-make db-migrate   # re-apply db/schema.sql (idempotent; this is the only migration mechanism)
-make db-psql      # inspect the index
-make db-destroy   # drop container + volume (only costs a re-index)
-
-make mcp-build    # cabal build --enable-tests (server + tests)
-make mcp-test     # cabal test (single exitcode-stdio suite in test/Spec.hs)
-make mcp-run      # cabal run dross-mcp against DROSS_NOTES_DIR (env/.envrc)
-make mcp-install  # cabal install into dross-mcp/bin (for `claude mcp add`)
-make mcp-watch    # ghcid typecheck/reload loop
-
-make bot-build    # go build -o dross-bot
-make bot-run      # build + run (token/notes-dir from env/.envrc; DROSS_MCP_BIN auto-set to the cabal binary)
-make bot-watch    # live-reload dev loop via wgo
-
-make web-install  # first time: npm install in dross-web
-make web-build    # build dross-web/dist (what the bot serves)
-make web-test     # tsc --noEmit + vitest (the org renderer)
-make web-serve    # run the reader alone on :8181, no Telegram token needed
-make web-dev      # vite live-reload, proxying /api to a running web-serve
-```
-
-MCP server, from `dross-mcp/` (the `mcp-*` targets above wrap these):
-
-```sh
-cabal run dross-mcp -- ~/notes   # run against a notes directory (or set DROSS_NOTES_DIR)
-cabal list-bin dross-mcp   # path to the built binary
-```
+`cabal run dross-mcp -- ~/notes` runs the server against a notes directory
+(or set `DROSS_NOTES_DIR`); `cabal list-bin dross-mcp` gives the built
+binary's path.
 
 Telegram bot, from `dross-bot/`:
 
 ```sh
-go vet ./...
 go test ./...             # git-proposal + splitter tests always run; the MCP smoke test needs DROSS_MCP_BIN + running DB, skips otherwise
 TELEGRAM_TOKEN=... DROSS_NOTES_DIR=~/notes DROSS_TELEGRAM_CHAT_ID=<id> ./dross-bot
 ./dross-bot send < msg.txt          # one-shot: deliver stdin to the chat
@@ -110,185 +83,7 @@ this invariant or put the state in org files / git instead.
 Data flow: org files on disk → megaparsec parser → incremental indexer →
 Postgres (tsvector FTS + pgvector) → MCP tools over stdio.
 
-- `src/Dross/Org/Types.hs`, `Org/Parser.hs` — parser for a deliberate
-  *subset* of org: headlines, property drawers, tags, `#+keywords`,
-  `[[id:...]]` links. Line-oriented (input normalized to trailing-newline
-  LF; every line parser consumes its newline — preserve this or `many`
-  loops can hang). Malformed drawers degrade to body text rather than
-  failing the file. Richer org semantics are intentionally out of scope
-  (that's Emacs's job) — don't grow the parser without checking CONCEPT.md.
-  The `import Prelude hiding (many)` is load-bearing: megaparsec's `many`
-  comes from parser-combinators and is a *different* entity from the
-  `Alternative` one relude re-exports, so both in scope is ambiguous.
-- `src/Dross/Index.hs` — everything Postgres. A "node" follows org-node
-  semantics: the file-level entry (top property drawer `:ID:`) plus any
-  headline with its own `:ID:`. Links are attributed to the *nearest
-  enclosing node with an ID* (`nodeLinks`), which is what makes `backlinks`
-  precise. `refreshIndex` is content-hash driven (SHA-256) and runs at the
-  top of **every** tool call — that is the freshness mechanism; there is no
-  inotify. Keep it cheap.
-- `src/Dross/Mcp/Protocol.hs`, `Mcp/Server.hs` — newline-delimited JSON-RPC
-  2.0 over stdio. stdout carries protocol messages only; all diagnostics go
-  to stderr (printing to stdout corrupts the MCP stream). Notifications
-  (requests without `id`) must never be answered.
-- `src/Dross/Tools.hs` — tool schemas + implementations (`search`,
-  `semantic-search`, `similar-notes`, `read-note`, `backlinks`,
-  `forward-links`, `neighborhood`, `stale-notes`, `recent-notes`,
-  `create-note`, `update-note`, `append-note`, `remove-entry`, `capture`,
-  `archive-document`, `graph`).
-  `read-note`'s `content` is the *indexed* body — `collectNodes` flattens it
-  for search, dropping headline stars, TODO keywords, and drawers — so
-  anything rendering an outline must pass `raw: true` and use that instead.
-  `graph` is the whole collection at once; `neighborhood` is the one to
-  reach for around a single note (its recursive CTE revisits cycles, so a
-  large `depth` is both expensive and not a substitute).
-  Tool results are JSON encoded into a single MCP text content block; tool
-  failures return `isError: true` rather than JSON-RPC errors. Mutations
-  follow the decided write policy: atomic temp-file+rename writes and hash
-  check-then-refuse — `read-note` returns the file's SHA-256 (hex);
-  `update-note`/`append-note` require it and refuse if the file changed
-  (the agent re-reads and retries). File-level notes only; `update-note`
-  also refuses edits that would drop node IDs still present in the file.
-  The raw-text surgery is pure (`src/Dross/Org/Edit.hs`) and covered by
-  the test suite.
-- `src/Dross/Chunk.hs`, `Dross/Embed.hs` — the embedding pipeline.
-  `indexFile` writes headline-level chunks (pure packing in `Chunk`, tested);
-  `Embed` is the Voyage HTTP client (`VOYAGE_API_KEY`; `DROSS_EMBED_MODEL`
-  overrides `voyage-3.5`, `DROSS_EMBED_URL` the endpoint — useful for a
-  local mock when smoke-testing). Vectors are fetched lazily inside
-  `semantic-search` and `similar-notes` only (`embedPending`) — no other
-  tool touches the network, and a missing key just disables those two
-  tools. Embeddings are keyed by `(content_sha256, model)`, not chunk id,
-  so they survive re-indexing; only changed content is re-embedded.
-  Archived-document extracted text (`archive-document`'s `text` parameter)
-  lives in a `.extract.txt` sidecar in the attach dir and is swept —
-  hash-driven, like org files — into `doc_chunks` rows attributed to the
-  literature note; deliberately *not* FK'd to `nodes` so they survive the
-  note file's delete-and-reinsert re-index. `search`, `semantic-search`,
-  and `similar-notes` all union them in. Because the sweep is by directory
-  and not per-note bookkeeping, a document archived without text — or with
-  a title-only one — can be repaired in place: `dross-bot reextract` sweeps
-  the tree and rewrites thin sidecars, or write one by hand
-  (`pdftotext file.pdf > .extract.txt` in its attach dir). Either way the
-  next tool call picks it up. Never re-run `archive-document` to fix this:
-  that mints a duplicate note.
-- `src/Dross/Git.hs` — auto-commit (decided policy: every mutation is a
-  commit). Commits only the touched paths on the current branch; all git
-  output captured (stdout is the MCP stream); failures logged, never
-  fatal. `Env`'s `envGit` is detected once at startup.
-- `dross-bot/` — Go Telegram bot (`main.go` telegram wiring + capture,
-  `mcp.go` minimal MCP stdio client, `web.go` URL snapshotting,
-  `outbound.go` one-shot `send`, `proposal.go` proposal
-  announce/approve/reject, `reextract.go` one-shot sidecar repair,
-  `server.go` the reader's HTTP backend).
-  It is an MCP *client*:
-  it spawns `dross-mcp` and routes text/forwards to `capture` (reply
-  includes similar-notes nudges, best-effort) and photos/files to
-  `archive-document`, so the write policy stays server-side. Every
-  archive is followed by a best-effort `capture` of an inbox entry
-  linking `[[id:...]]` to the stub note — that entry, not a tag, is the
-  triage marker. Messages
-  starting with a URL are snapshotted client-side (obelisk self-contained
-  HTML + readability-extracted text) and archived via `archive-document`,
-  falling back to `capture` if the fetch fails. When readability comes back
-  implausibly thin next to a raw text strip of the snapshot (`preferFallback`
-  in `web.go` — the failure mode is a title-only extract on markup it can't
-  read), the strip is indexed instead and the reply says so; that pollutes
-  the index with nav and comments, which is the accepted price of the page
-  being findable at all.
-  Arxiv links (any of `/abs/`, `/pdf/`, `/html/`) are normalized: the abs
-  page is snapshotted and the PDF attached via `extra_paths`, with
-  pdftotext full text as the indexed `text` — PDF download and extraction
-  are both best-effort. Single shared
-  subprocess guarded by a mutex; restarted once on transport failure.
-  Proposal callbacks run git in the notes repo; branch names are validated
-  (`proposal/` prefix, slug charset, ≤56 chars) because callback data
-  crosses the network.
-- `dross-bot/server.go` — the reader's read-only HTTP API, in the bot
-  process but on its **own** `dross-mcp` subprocess (`mcp.go` serializes
-  behind one mutex, so a shared client would let a page load stall a
-  capture). No listener unless `DROSS_WEB_ADDR` is set; `DROSS_WEB_DIST`
-  points at the built frontend (served from disk, SPA fallback). Routes are
-  thin proxies that pass the tool's JSON string straight through;
-  `/api/note/{id}` is the exception, bundling note + backlinks +
-  forward-links so one navigation costs one `refreshIndex` sweep instead of
-  three. `/api/attach` is the only path where a request touches the
-  filesystem — it resolves symlinks on both ends and checks containment.
-- `dross-web/` — React + Vite reader, phone-first, **read-only** (Telegram
-  captures, Claude Code edits). `src/org/` parses the same org subset the
-  server does and renders it; it consumes `raw`, never `content`. The
-  design ties one thing together: the steel-tempering colour ramp
-  (`src/temper.ts`) always means *distance from here* — hops in the graph,
-  score in search, proximity in the drawer — so don't reach for it to
-  colour anything that isn't a distance. Note *kind* therefore rides a
-  second, independent channel: shape (`src/kind.ts`), where a square is a
-  literature note and a circle is everything else. Keep the two apart — a
-  kind never takes a colour, a distance never takes a shape. Graph
-  rendering is canvas +
-  d3-force; note that canvas silently ignores `var(--x)` assigned to
-  `fillStyle`/`font`, so colours must be resolved through
-  `getComputedStyle` first.
-- `proactive/` — stage-4 scheduled jobs: `run-job.sh` +
-  `prompts/{digest,gardening,synthesis}.md`. Prompts are the job
-  definitions; synthesis stages proposal branches via a temp git worktree
-  (the live checkout never switches branches).
-- `docs/notes-CLAUDE.md` — template CLAUDE.md for the *notes* repository:
-  Zettelkasten discipline plus the agent-side workflows (inbox processing,
-  link suggestion via `similar-notes`, Q&A with citations, literature-note
-  drafting). Server tools change → check whether this template needs the
-  same update.
-- `db/schema.sql` — canonical schema, applied via `make db-migrate`; every
-  statement must stay idempotent (`IF NOT EXISTS` / `ON CONFLICT`). The
-  `embeddings` table is `vector(1024)` for voyage-3.5, keyed by content
-  hash + model.
-
 ## Conventions
 
-- **relude is the prelude**, wired up by `mixins:` in the `common shared`
-  stanza of `dross-mcp.cabal` (not `NoImplicitPrelude` + `import Relude`) —
-  so don't add `import Relude` to modules. When a name clashes, hide
-  relude's with `import Prelude hiding (...)`, as `Org/Parser.hs` does for
-  megaparsec's `many`.
-- **Never import `Relude.Unsafe`** — it re-introduces the partial functions
-  (`head`, `fromJust`, `read`, `!!`) relude removed, and this codebase has
-  none. The `mixins` stanza doesn't expose it, so importing it is a compile
-  error; if you're tempted to widen the stanza, reach for the total version
-  instead (`viaNonEmpty head`, `fromMaybe`, `readMaybe`, `!!?`).
-  `Relude.Extra` *is* exposed and is fair game.
-- No `T.pack`. relude's `show` is `(Show a, IsString b) => a -> b`, so it
-  produces `Text` directly — write `show e`, not `T.pack (show e)`. For a
-  plain `String` (or `FilePath`), use `toText`. `T.unpack` still has its
-  uses; its relude counterpart is `toString`.
-- relude re-exports less than its docs suggest. It gives you `stdout`,
-  `stderr`, `hFlush`, `hSetBuffering`, `BufferMode`, `die`, `exitFailure`,
-  `getArgs`, `lookupEnv`, and the `IORef` API — but **not** `hPutStrLn`,
-  `isEOF`, `ExitCode`, or `try`, so those keep their explicit `System.IO` /
-  `System.Exit` / `Control.Exception` imports. Check the actual export list
-  before assuming.
-- GHC2024, set once in `common shared`, is the only language setting in the
-  cabal file. *Every* extension, `OverloadedStrings` included, goes in a
-  per-file `LANGUAGE` pragma. All library modules and the test suite carry
-  `OverloadedStrings`; `app/Main.hs` needs no extensions.
-- **Always fix compiler warnings.** `-Wall` is on for every stanza and the
-  tree is warning-clean; keep it that way. Under relude a redundant import
-  warning means the name now comes from the prelude — delete the import
-  rather than silence the warning.
-- Where-bound helpers that build aeson `Value`s need explicit type
-  signatures, or string literals become ambiguous.
-- postgresql-simple `query_` results usually need a result-type annotation
-  (e.g. `:: IO [(FilePath, Binary ByteString)]`).
-- SHA-256 comes from `cryptohash-sha256` deliberately: crypton >=1.1
-  dropped `memory`'s ByteArrayAccess, so `BA.convert` on digests no longer
-  compiles. Don't "upgrade" back to crypton.
-- Duplicate node IDs across files are resolved with `ON CONFLICT DO
-  NOTHING` (first file wins) — deliberate, not an oversight.
-- Tools that modify an existing note go through `mutateNote` in `Tools.hs`
-  (hash check-then-refuse, atomic write, re-index) — don't write files
-  directly. `remove-entry` is the exception: it deletes an ID-bearing
-  *headline* (level != 0), the opposite of `mutateNote`'s file-level-only
-  guard, so it open-codes the same check-then-refuse harness. Tools writing
-  *fresh* content (`create-note`,
-  `archive-document`, append-only `capture`) skip the hash but still use
-  `atomicWrite` (see CONCEPT.md Decisions).
 - This machine has no passwordless sudo: for system packages, ask the user
   to run the install themselves (e.g. `! sudo pacman -S ...`).
