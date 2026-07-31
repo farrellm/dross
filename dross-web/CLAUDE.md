@@ -17,3 +17,8 @@ and the build/run commands.
   d3-force; note that canvas silently ignores `var(--x)` assigned to
   `fillStyle`/`font`, so colours must be resolved through
   `getComputedStyle` first.
+
+The built output (`dross-web/dist`) is served by the *bot* process, not a
+standalone server — `DROSS_WEB_DIST` points at it and the API lives in
+`dross-bot/server.go`. `make web-dev` proxies `/api` to a running
+`web-serve`, so the backend must be up separately.

@@ -3,6 +3,8 @@
 The Go Telegram bot. See the repo-root `CLAUDE.md` for the project
 overview and the build/run commands.
 
+Run `go vet ./...` alongside `go test ./...` before considering a change done.
+
 - `dross-bot/` — Go Telegram bot (`main.go` telegram wiring + capture,
   `mcp.go` minimal MCP stdio client, `web.go` URL snapshotting,
   `outbound.go` one-shot `send`, `proposal.go` proposal
