@@ -22,3 +22,9 @@ The built output (`dross-web/dist`) is served by the *bot* process, not a
 standalone server — `DROSS_WEB_DIST` points at it and the API lives in
 `dross-bot/server.go`. `make web-dev` proxies `/api` to a running
 `web-serve`, so the backend must be up separately.
+
+`DROSS_WEB_API` overrides the dev proxy target (default
+`http://127.0.0.1:8181`). The dev server sets `host: true` for phone
+access over the tailnet, so `allowedHosts` in `vite.config.ts` is an
+explicit allowlist — reaching it from a new hostname fails with Vite's
+"Blocked request. This host is not allowed" until you add it there.
