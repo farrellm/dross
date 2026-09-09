@@ -187,9 +187,20 @@ Roughly ordered by value:
   neighborhood tools emit each node's tags for it; the taxonomy stays in
   the org files, and the reader reads only the one distinction it draws.
 - Web static files are served **from disk** (`DROSS_WEB_DIST`), not
-  `go:embed`. There is no deployment story here — everything runs from the
-  checkout — so embedding would buy nothing and cost a build-order
-  dependency between the Go and npm builds.
+  `go:embed`. Deployment is a systemd unit pointed at this checkout (below),
+  so embedding would buy nothing and cost a build-order dependency between
+  the Go and npm builds.
+- Deployment is a **systemd user unit** (`systemd/dross.service`) running the
+  one `dross-bot` process — bot and reader together, since the reader already
+  rides along in it. Tracked in the repo and symlinked into
+  `~/.config/systemd/user/`, so the unit is version-controlled and a deploy is
+  `daemon-reload`. It reads `.envrc` for secrets (systemd's `EnvironmentFile=`
+  cannot parse `export VAR=`), and starts the database container first.
+- The reader binds **loopback only** and is published with `tailscale serve`
+  on a tailnet-only HTTPS port, never `funnel`. This is what "the perimeter is
+  Tailscale" means operationally: with no auth in the app, a wildcard bind or
+  a funnel would be the whole security model gone. The unit owns the mapping
+  so one file says how dross is exposed.
 - Index database: **PostgreSQL** — `tsvector` for full-text, **pgvector**
   for embeddings; a rebuildable cache, never the source of truth. Runs in
   **Docker** (`pgvector/pgvector` image), managed via the root `Makefile`.

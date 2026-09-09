@@ -25,6 +25,7 @@ settled choices.
 | `dross-mcp/` | Haskell MCP server: parses the notes, maintains a Postgres index (full-text + pgvector embeddings), and exposes the archive as tools — `search`, `semantic-search`, `similar-notes`, `read-note`, `backlinks`, `forward-links`, `neighborhood`, `graph`, `stale-notes`, `recent-notes`, `create-note`, `update-note`, `append-note`, `capture`, `archive-document`. All writes are atomic, conflict-checked, and auto-committed to git. |
 | `dross-bot/` | Go Telegram bot. Inbound: text/links/forwards → inbox, photos/files → the document archive, with "connects to" nudges on capture. Outbound: one-shot `send` and `propose` modes for scheduled jobs, plus inline Approve/Reject buttons for agent proposals. |
 | `dross-web/` | React reader for the phone: browse and read notes, search by words or by meaning, open a note's backlinks from an always-visible edge tab, and walk the link graph. Read-only by design — Telegram captures, Claude Code edits. Served by `dross-bot` over your tailnet. |
+| `systemd/` | The user unit that runs the bot + reader and publishes the reader on the tailnet with `tailscale serve`. Symlinked into `~/.config/systemd/user/`. |
 | `proactive/` | Scheduled agent jobs (cron + headless `claude -p`): weekly digest, gardening (resurfaced stale notes, duplicate flags), synthesis (drafted hub notes staged as git proposals). |
 | `docs/notes-CLAUDE.md` | Template CLAUDE.md for your *notes* repository — teaches the agent Zettelkasten discipline and the workflows (inbox processing, link suggestion, Q&A with citations, literature notes). |
 
@@ -107,13 +108,43 @@ by hand.
 
 ```sh
 make web-install && make web-build
-DROSS_WEB_ADDR=:8181 make bot-run     # or `make web-serve` without the bot
+make web-serve                        # or `make bot-run`, which serves it too
 ```
 
-Open `http://<this machine>:8181` from your phone. There is no login: the
-reader is read-only and expects to be reached over a private network —
-[Tailscale](https://tailscale.com) is what this is built for. Don't put it
-on the open internet.
+The reader binds `127.0.0.1:8181` and expects a
+[Tailscale](https://tailscale.com) proxy in front of it — see below. There
+is no login: it is read-only and the tailnet is the entire security model,
+so don't put it on the open internet.
+
+## Run it as a service
+
+`systemd/dross.service` is a systemd **user** unit that runs the bot (and
+with it the reader), starts the database container first, and publishes the
+reader on the tailnet with `tailscale serve`. Build the pieces it expects,
+then link it in:
+
+```sh
+make mcp-install && make bot-build && make web-build
+ln -s ~/workspace/dross/systemd/dross.service ~/.config/systemd/user/
+systemctl --user daemon-reload
+systemctl --user enable --now dross
+```
+
+The unit is a symlink to the copy in the repo, so editing it there and
+running `systemctl --user daemon-reload` is the whole deploy. It reads
+`.envrc` for the tokens and paths, but sets the bind address and
+`DROSS_WEB_DIST` itself.
+
+The reader is then at `https://<host>.<tailnet>.ts.net:8444` from any
+device on your tailnet — real TLS, no port forwarding, nothing listening on
+a public interface. `tailscale serve status` shows the mapping; the unit
+sets it up on start and tears it down on stop. Pick a different port in the
+unit if 8444 is taken. Deliberately `serve` and not `funnel`: funnel would
+put an unauthenticated view of your notes on the public internet.
+
+`loginctl enable-linger $USER` (once) keeps a user unit running when you are
+not logged in. The unit does not build anything — after a Go change, run
+`make bot-build && systemctl --user restart dross`.
 
 ## Everyday use
 
