@@ -11,7 +11,7 @@ export default defineConfig({
     port: 5176,
     // Reachable from the phone over the tailnet, like the bot itself.
     host: true,
-    allowedHosts: ['dross-org.duckdns.org'],
+    allowedHosts: ['agda.tail0cb6d.ts.net'],
     proxy: { '/api': { target: api, changeOrigin: true } },
   },
   build: { outDir: 'dist', sourcemap: true },

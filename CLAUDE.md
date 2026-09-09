@@ -45,6 +45,16 @@ proposal buttons run `git merge` / `git branch -D` in the notes repo, and
 `DROSS_TELEGRAM_CHAT_ID` unset it refuses captures and replies with the
 sender's chat ID (first-time setup).
 
+In production the bot runs as a systemd **user** unit, `systemd/dross.service`
+— symlinked into `~/.config/systemd/user/`, so edit it in the repo and
+`systemctl --user daemon-reload`. It sources `.envrc`, pins the reader to
+`127.0.0.1:8181`, starts the `dross-db` container, and publishes the reader
+on the tailnet with `tailscale serve --https=8444` (torn down on stop). It
+builds nothing: after a Go change the running service keeps the old binary
+until `make bot-build && systemctl --user restart dross` — the same staleness
+trap as `mcp-install` below, one level out again. `journalctl --user -u dross`
+for its logs.
+
 Proactive jobs: `proactive/run-job.sh <digest|gardening|synthesis>` — cron
 + headless `claude -p` over the dross MCP tools, delivered via the bot's
 one-shot modes. The prompt files in `proactive/prompts/` are the job

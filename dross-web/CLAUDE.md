@@ -24,7 +24,11 @@ standalone server — `DROSS_WEB_DIST` points at it and the API lives in
 `web-serve`, so the backend must be up separately.
 
 `DROSS_WEB_API` overrides the dev proxy target (default
-`http://127.0.0.1:8181`). The dev server sets `host: true` for phone
-access over the tailnet, so `allowedHosts` in `vite.config.ts` is an
-explicit allowlist — reaching it from a new hostname fails with Vite's
-"Blocked request. This host is not allowed" until you add it there.
+`http://127.0.0.1:8181`, which is where the unit and `make web-serve` both
+bind). The dev server sets `host: true` for phone access over the tailnet,
+so `allowedHosts` in `vite.config.ts` is an explicit allowlist — it holds
+this machine's MagicDNS name (`agda.tail0cb6d.ts.net`), and reaching the dev
+server from any other hostname fails with Vite's "Blocked request. This host
+is not allowed" until you add it there. The *production* reader does not go
+through Vite at all: `systemd/dross.service` puts `tailscale serve` in front
+of the bot on port 8444.

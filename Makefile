@@ -126,6 +126,8 @@ web-test:
 web-dev:
 	cd dross-web && npm run dev
 
-## serve the reader alone, without the Telegram bot (DROSS_WEB_ADDR or :8181)
+## serve the reader alone, without the Telegram bot (DROSS_WEB_ADDR or 127.0.0.1:8181)
+# Loopback, not the wildcard: the reader has no auth, and the only door is the
+# `tailscale serve` proxy that systemd/dross.service sets up.
 web-serve: bot-build
-	cd dross-bot && DROSS_WEB_ADDR=$${DROSS_WEB_ADDR:-:8181} ./dross-bot web
+	cd dross-bot && DROSS_WEB_ADDR=$${DROSS_WEB_ADDR:-127.0.0.1:8181} ./dross-bot web

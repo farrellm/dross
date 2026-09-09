@@ -36,7 +36,10 @@ Run `go vet ./...` alongside `go test ./...` before considering a change done.
 - `dross-bot/server.go` — the reader's read-only HTTP API, in the bot
   process but on its **own** `dross-mcp` subprocess (`mcp.go` serializes
   behind one mutex, so a shared client would let a page load stall a
-  capture). No listener unless `DROSS_WEB_ADDR` is set; `DROSS_WEB_DIST`
+  capture). No listener unless `DROSS_WEB_ADDR` is set, and it should always
+  be a *loopback* bind — the API has no auth of any kind, so the only door
+  is the `tailscale serve` proxy `systemd/dross.service` sets up.
+  `DROSS_WEB_DIST`
   points at the built frontend (served from disk, SPA fallback). Routes are
   thin proxies that pass the tool's JSON string straight through;
   `/api/note/{id}` is the exception, bundling note + backlinks +

@@ -1,0 +1,47 @@
+# Tracked in the repo at systemd/dross.service, and installed into
+# ~/.config/systemd/user/ as a SYMLINK to it (see README, "Run it as a
+# service"), so editing it here and running `systemctl --user daemon-reload`
+# is the whole deploy. %h below assumes the repo is at ~/workspace/dross; a
+# clone anywhere else needs these paths changed.
+[Unit]
+Description=Dross bot + web reader (served on the tailnet)
+Documentation=file:///home/farrellm/workspace/dross/README.md
+# A *user* manager cannot order against system units (docker.service,
+# tailscaled) and has no network-online.target, so there is nothing useful to
+# wait for here. The boot race is handled by ExecStartPre failing and
+# Restart=always retrying instead.
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+WorkingDirectory=%h/workspace/dross/dross-bot
+# `make db-create` builds the container with `docker run`, not compose, so
+# there is no `compose up -d --wait` to lean on here: `docker start` is a
+# no-op on an already-running container, and the poll is what the Makefile's
+# db-wait target does. dross-mcp fails fast if the index is unreachable.
+ExecStartPre=/usr/bin/docker start dross-db
+ExecStartPre=/usr/bin/bash -c 'until docker exec dross-db pg_isready -U dross -d dross >/dev/null 2>&1; do sleep 0.5; done'
+# The bot does no dotenv loading (bare os.Getenv), and systemd's
+# EnvironmentFile= cannot parse .envrc's `export VAR=...` lines. Sourcing it
+# keeps .envrc the single copy of TELEGRAM_TOKEN / VOYAGE_API_KEY /
+# DROSS_NOTES_DIR / DROSS_MCP_BIN, so rotating one is edit + restart with no
+# second copy to drift. The two deployment vars are exported *after* the
+# source, so this unit stays authoritative for how dross binds and what it
+# serves whatever .envrc happens to say. `exec` keeps the bot as MAINPID.
+ExecStart=/usr/bin/bash -c 'set -a; . %h/workspace/dross/.envrc; set +a; export DROSS_WEB_ADDR=127.0.0.1:8181 DROSS_WEB_DIST=%h/workspace/dross/dross-web/dist; exec %h/workspace/dross/dross-bot/dross-bot'
+# Port 8444, tailnet-only: 443 is nisaba's Funnel and 8443/8445/8446 are
+# aisleflow/eidet/scad-view. `serve` and never `funnel` -- the reader has no
+# auth at all (CONCEPT.md: the web perimeter is Tailscale, not the app), so
+# the tailnet is the whole security model and must not be bypassed.
+# Idempotent; keeps this unit the single source of truth for how dross is
+# exposed, even though tailscaled persists the serve config on its own.
+ExecStartPost=/usr/bin/tailscale serve --bg --https=8444 http://127.0.0.1:8181
+ExecStopPost=-/usr/bin/tailscale serve --https=8444 off
+Restart=always
+RestartSec=10
+# startWeb drains for 5s on SIGTERM and there are two dross-mcp subprocesses
+# to reap behind it (the bot's and the reader's own).
+TimeoutStopSec=30
+
+[Install]
+WantedBy=default.target
