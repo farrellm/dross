@@ -28,6 +28,7 @@ settled choices.
 | `systemd/` | The user unit that runs the bot + reader and publishes the reader on the tailnet with `tailscale serve`. Symlinked into `~/.config/systemd/user/`. |
 | `proactive/` | Scheduled agent jobs (cron + headless `claude -p`): weekly digest, gardening (resurfaced stale notes, duplicate flags), synthesis (drafted hub notes staged as git proposals). |
 | `docs/notes-CLAUDE.md` | Template CLAUDE.md for your *notes* repository — teaches the agent Zettelkasten discipline and the workflows (inbox processing, link suggestion, Q&A with citations, literature notes). |
+| `docs/skills/` | Claude Code skills for the notes repo: `inbox` (guided inbox processing) and manual, interactive runs of the proactive jobs (`digest`, `gardening`, `synthesis`). |
 
 Everything meets in the middle: Claude Code (interactively) and the
 proactive jobs (on a schedule) drive the same MCP tools, the bot is an MCP
@@ -84,8 +85,10 @@ claude mcp add dross --env VOYAGE_API_KEY=... -- $(pwd)/bin/dross-mcp ~/notes
 `similar-notes` are disabled and everything else works.
 
 **3. Notes repo**: copy `docs/notes-CLAUDE.md` to `~/notes/CLAUDE.md` and
-adjust. Now `claude` in `~/notes` is the primary interface — capture,
-search, process the inbox, ask questions of the archive.
+adjust, and copy (or symlink) `docs/skills/*` into `~/notes/.claude/skills/`.
+Now `claude` in `~/notes` is the primary interface — capture, search, ask
+questions of the archive, and `/inbox`, `/digest`, `/gardening`,
+`/synthesis` on demand.
 
 **4. Telegram bot** (optional, for mobile capture and proactive messages):
 create a bot with [@BotFather](https://t.me/BotFather), then

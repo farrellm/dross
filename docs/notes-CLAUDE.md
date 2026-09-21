@@ -37,6 +37,11 @@ see `CONCEPT.md` in the dross repo for the system design.
 
 ## Workflows
 
+The step-by-step procedures live in skills under `.claude/skills/` (copied
+from the dross repo's `docs/skills/`): `/inbox` runs inbox processing, and
+`/digest`, `/gardening`, `/synthesis` are manual runs of the scheduled jobs.
+The sections below are the policy those skills follow.
+
 ### Inbox processing
 
 For each `:inbox:` entry: draft a properly titled, tagged permanent or
